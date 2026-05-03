@@ -7,6 +7,16 @@ set -e
 IMAGE_NAME="openwrt-mediacenter"
 CONTAINER_NAME="mediacenter"
 CONFIG_PATH="${CONFIG_PATH:-$(pwd)/config.yaml}"
+# 持久化数据目录（定时任务元数据、脚本、日志）
+DATA_PATH="${DATA_PATH:-/opt/mediacenter}"
+
+# 准备宿主机持久化目录与文件，避免 Docker 把不存在的单文件挂载点创建成目录
+prepare_data_dirs() {
+  mkdir -p "$DATA_PATH/scripts" "$DATA_PATH/job_logs"
+  if [ ! -e "$DATA_PATH/user_jobs.json" ]; then
+    echo "[]" > "$DATA_PATH/user_jobs.json"
+  fi
+}
 
 # ---- macvlan 默认参数（按实际网络环境修改） ----
 MACVLAN_NET="${MACVLAN_NET:-mcvlan}"
@@ -48,7 +58,10 @@ case "${1:-run}" in
       exit 1
     }
 
+    prepare_data_dirs
+
     echo "=== 启动媒体中心容器 (macvlan, IP=$CONTAINER_IP) ==="
+    echo "  数据目录: $DATA_PATH"
     docker run -d \
       --name "$CONTAINER_NAME" \
       --restart unless-stopped \
@@ -57,6 +70,9 @@ case "${1:-run}" in
       -e PULSE_SERVER=unix:/run/pulse/native \
       -v /run/pulse:/run/pulse \
       -v "$CONFIG_PATH":/etc/mediacenter/config.yaml:ro \
+      -v "$DATA_PATH/user_jobs.json":/etc/mediacenter/user_jobs.json \
+      -v "$DATA_PATH/scripts":/etc/mediacenter/scripts \
+      -v "$DATA_PATH/job_logs":/etc/mediacenter/job_logs \
       -v /tmp/tts_cache:/tmp/tts_cache \
       -v /tmp/news:/tmp/news \
       -e AIRPLAY_NAME="${AIRPLAY_NAME:-OpenWrt MediaCenter}" \
@@ -74,7 +90,10 @@ case "${1:-run}" in
       echo "已创建配置文件: $CONFIG_PATH (请根据需要修改)"
     fi
 
+    prepare_data_dirs
+
     echo "=== 启动媒体中心容器 (host network) ==="
+    echo "  数据目录: $DATA_PATH"
     docker run -d \
       --name "$CONTAINER_NAME" \
       --restart unless-stopped \
@@ -82,6 +101,9 @@ case "${1:-run}" in
       -e PULSE_SERVER=unix:/run/pulse/native \
       -v /run/pulse:/run/pulse \
       -v "$CONFIG_PATH":/etc/mediacenter/config.yaml:ro \
+      -v "$DATA_PATH/user_jobs.json":/etc/mediacenter/user_jobs.json \
+      -v "$DATA_PATH/scripts":/etc/mediacenter/scripts \
+      -v "$DATA_PATH/job_logs":/etc/mediacenter/job_logs \
       -v /tmp/tts_cache:/tmp/tts_cache \
       -v /tmp/news:/tmp/news \
       -e AIRPLAY_NAME="${AIRPLAY_NAME:-OpenWrt MediaCenter}" \
