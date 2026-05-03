@@ -1,0 +1,82 @@
+# OpenWrt 媒体中心配置文件
+# 复制此文件为 config.yaml 并根据实际情况修改
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+# 音频设备配置
+audio:
+  # 音频后端: pulse (推荐，自动路由到蓝牙音箱等) / alsa
+  backend: "pulse"
+  # PulseAudio sink 名称，留空则使用系统默认 sink（通常就是蓝牙音箱）
+  # 使用 `pactl list short sinks` 查看可用 sink
+  pulse_sink: ""
+  # 默认音量 (0-100)
+  default_volume: 50
+
+# 背景音乐配置
+background_music:
+  # 是否开机自动播放
+  auto_play: false
+  # 默认播放列表 (URL 列表)
+  playlist: []
+  # 播放模式: sequential / shuffle / repeat_one / repeat_all
+  play_mode: "repeat_all"
+
+# AirPlay 配置 (shairport-sync)
+airplay:
+  enabled: true
+  # 显示的设备名称
+  name: "OpenWrt MediaCenter"
+  # shairport-sync 配置文件路径
+  config_path: "/etc/shairport-sync.conf"
+  # 端口
+  port: 5000
+
+# DLNA 配置 (gmrender-resurrect)
+dlna:
+  enabled: true
+  # 显示的设备名称
+  name: "OpenWrt MediaCenter"
+  # 端口
+  port: 49152
+
+# TTS 配置
+tts:
+  # 引擎: edge-tts / openai / piper
+  engine: "edge-tts"
+  # edge-tts 语音
+  voice: "zh-CN-XiaoxiaoNeural"
+  # 语速调整 (-50% ~ +50%)
+  rate: "+0%"
+  # TTS 临时文件目录
+  cache_dir: "/tmp/tts_cache"
+  # OpenAI 配置 (当 engine 为 openai 时)
+  openai:
+    api_key: ""
+    base_url: "https://api.openai.com/v1"
+    model: "tts-1"
+    voice: "alloy"
+
+# 定时任务
+scheduler:
+  jobs:
+    # 下载新闻联播
+    - id: "download_news"
+      enabled: true
+      # cron 表达式: 每天 19:30 下载
+      cron: "30 19 * * *"
+      type: "download_news"
+
+# AI 配置
+ai:
+  enabled: false
+  # OpenAI 兼容 API
+  api_key: ""
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"
+  # 系统提示词
+  system_prompt: "你是一个智能家居助手，可以控制音乐播放、TTS 播报等。"
+  # 记忆文件路径
+  memory_file: "/etc/mediacenter/memory.json"

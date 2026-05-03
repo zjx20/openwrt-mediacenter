@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>播放器 - OpenWrt MediaCenter</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #fff;
+    --border: #e3e5e8;
+    --text: #222;
+    --muted: #707684;
+    --accent: #2f6feb;
+    --accent-hover: #1d56cc;
+    --danger: #d23f3f;
+    --warn: #d28a2a;
+    --ok: #2a9b5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .brand { font-weight: 600; font-size: 15px; color: var(--accent); }
+  .nav-tabs { display: flex; gap: 4px; flex: 1; }
+  .nav-tabs a {
+    color: var(--muted);
+    text-decoration: none;
+    padding: 6px 14px;
+    border-radius: 5px;
+    font-size: 14px;
+  }
+  .nav-tabs a:hover { background: #f0f2f5; color: var(--text); }
+  .nav-tabs a.active { background: var(--accent); color: #fff; }
+  main { padding: 20px 24px; max-width: 960px; margin: 0 auto; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .card h2 {
+    margin: 0 0 12px 0;
+    font-size: 14px;
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  button {
+    font: inherit;
+    cursor: pointer;
+    background: #fff;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 5px;
+  }
+  button:hover { background: #f0f2f5; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button.danger { color: var(--danger); border-color: #f0c4c4; }
+  button.danger:hover { background: #fbeaea; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* Now playing card */
+  .np-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .np-info { flex: 1; min-width: 0; }
+  .np-title {
+    font-size: 17px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .np-artist { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .np-meta { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    background: #eef1f4;
+    color: var(--muted);
+  }
+  .badge.ok { background: #e6f6ed; color: var(--ok); }
+  .badge.warn { background: #fff5e1; color: var(--warn); }
+  .badge.muted { background: #eef1f4; color: var(--muted); }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+  .btn-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    font-size: 18px;
+    border: 1px solid var(--border);
+    background: #fff;
+  }
+  .btn-icon:hover { background: #f0f2f5; }
+  .btn-icon.primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+    width: 52px;
+    height: 52px;
+    font-size: 22px;
+  }
+  .btn-icon.primary:hover { background: var(--accent-hover); }
+
+  /* Volume + mode row */
+  .vol-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+  .vol-row label { color: var(--muted); min-width: 60px; }
+  .vol-row input[type=range] { flex: 1; max-width: 320px; }
+  .vol-val { width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  .mode-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .mode-row button {
+    font-size: 12px;
+    padding: 4px 10px;
+  }
+  .mode-row button.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+
+  /* Play form */
+  .play-form { display: flex; gap: 8px; }
+  .play-form input {
+    flex: 1;
+    font: inherit;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 7px 10px;
+    background: #fff;
+  }
+  .play-form input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  /* Playlist */
+  .playlist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 400px;
+    overflow: auto;
+  }
+  .playlist li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .playlist li:last-child { border-bottom: none; }
+  .playlist li.current {
+    background: #eaf1ff;
+    border-left: 3px solid var(--accent);
+    padding-left: 7px;
+  }
+  .playlist .pl-idx {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    width: 24px;
+    text-align: right;
+  }
+  .playlist .pl-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .playlist .pl-artist {
+    color: var(--muted);
+    font-size: 12px;
+    margin-left: 8px;
+  }
+  .playlist .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 24px;
+  }
+
+  /* Status grid */
+  .status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+  }
+  .status-cell {
+    background: #fafbfc;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .status-cell .label {
+    color: var(--muted);
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+  .status-cell .value { font-weight: 600; }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #2f343d;
+    color: #fff;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.15);
+    z-index: 200;
+  }
+  .toast.error { background: var(--danger); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">MediaCenter</div>
+  <nav class="nav-tabs">
+    <a href="/ui/" class="active">播放器</a>
+    <a href="/ui/scheduler.html">定时任务</a>
+  </nav>
+</header>
+<main>
+
+<!-- Now playing -->
+<div class="card">
+  <h2>当前播放</h2>
+  <div class="np-row">
+    <div class="np-info">
+      <div id="np-title" class="np-title">未在播放</div>
+      <div id="np-artist" class="np-artist">—</div>
+      <div class="np-meta">
+        <span id="np-state" class="badge muted">STOPPED</span>
+        <span id="np-source" class="badge" style="display:none"></span>
+        <span id="np-active" class="badge muted" style="display:none"></span>
+      </div>
+    </div>
+  </div>
+  <div class="controls">
+    <button class="btn-icon" title="上一首" onclick="prevTrack()">⏮</button>
+    <button id="play-pause" class="btn-icon primary" title="播放 / 暂停" onclick="togglePlayPause()">▶</button>
+    <button class="btn-icon" title="下一首" onclick="nextTrack()">⏭</button>
+    <button class="btn-icon" title="停止" onclick="stopPlay()">⏹</button>
+  </div>
+  <div class="vol-row">
+    <label>音量</label>
+    <input id="volume" type="range" min="0" max="100" value="50" oninput="onVolumeInput()" onchange="onVolumeChange()">
+    <span id="vol-val" class="vol-val">50</span>
+  </div>
+  <div class="vol-row">
+    <label>播放模式</label>
+    <div class="mode-row">
+      <button data-mode="sequential" onclick="setMode('sequential')">顺序</button>
+      <button data-mode="repeat_all" onclick="setMode('repeat_all')">列表循环</button>
+      <button data-mode="repeat_one" onclick="setMode('repeat_one')">单曲循环</button>
+      <button data-mode="shuffle" onclick="setMode('shuffle')">随机</button>
+    </div>
+  </div>
+</div>
+
+<!-- Play URL -->
+<div class="card">
+  <h2>播放新内容</h2>
+  <div class="play-form">
+    <input id="play-url" type="text" placeholder="粘贴音频 URL / YouTube / Bilibili 链接">
+    <button class="primary" onclick="playNow()">立即播放</button>
+    <button onclick="addToQueue()">加入队列</button>
+  </div>
+  <div style="font-size:12px;color:var(--muted);margin-top:6px">
+    "立即播放"会清空当前播放列表并立即播放；"加入队列"会追加到现有列表末尾
+  </div>
+</div>
+
+<!-- Playlist -->
+<div class="card">
+  <h2>播放列表 <span id="pl-count" style="color:var(--muted);font-weight:normal"></span></h2>
+  <ul id="playlist" class="playlist"></ul>
+</div>
+
+<!-- System status -->
+<div class="card">
+  <h2>系统状态</h2>
+  <div class="status-grid" id="sys-status"></div>
+</div>
+
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let currentMode = "repeat_all";
+let lastVolume = 50;
+let pollTimer = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("json") ? res.json() : res.text();
+}
+
+function toast(msg, isError = false) {
+  const el = $("toast");
+  el.className = "toast" + (isError ? " error" : "");
+  el.textContent = msg;
+  el.style.display = "block";
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { el.style.display = "none"; }, 2000);
+}
+
+async function refresh() {
+  try {
+    const [status, tracksData] = await Promise.all([
+      api("/api/status"),
+      api("/api/music/tracks"),
+    ]);
+    renderNowPlaying(status);
+    renderPlaylist(tracksData);
+    renderSysStatus(status);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderNowPlaying(status) {
+  const bg = status.background_music || {};
+  const track = bg.current_track;
+  const state = bg.state || "STOPPED";
+  const playing = state === "PLAYING";
+  const paused = state === "PAUSED";
+
+  $("np-title").textContent = track ? (track.title || track.url) : "未在播放";
+  $("np-artist").textContent = track && track.artist ? track.artist : "—";
+
+  const sb = $("np-state");
+  sb.textContent = state;
+  sb.className = "badge " + (playing ? "ok" : paused ? "warn" : "muted");
+
+  const ss = $("np-source");
+  if (track && track.source) {
+    ss.textContent = track.source;
+    ss.style.display = "";
+  } else {
+    ss.style.display = "none";
+  }
+
+  // 高优先级激活提示
+  const active = (status.audio_channels && Object.entries(status.audio_channels)
+    .filter(([k, v]) => k !== "BACKGROUND" && v.state === "PLAYING")
+    .map(([k]) => k))[0];
+  const ab = $("np-active");
+  if (active) {
+    ab.textContent = active + " 占用中";
+    ab.className = "badge warn";
+    ab.style.display = "";
+  } else {
+    ab.style.display = "none";
+  }
+
+  // play/pause button icon
+  $("play-pause").textContent = playing ? "⏸" : "▶";
+
+  // play mode
+  if (bg.play_mode && bg.play_mode !== currentMode) {
+    currentMode = bg.play_mode;
+    document.querySelectorAll(".mode-row button").forEach(b => {
+      b.classList.toggle("active", b.dataset.mode === currentMode);
+    });
+  }
+}
+
+function renderPlaylist(data) {
+  const ul = $("playlist");
+  const tracks = data.tracks || [];
+  $("pl-count").textContent = tracks.length ? `(${tracks.length} 首，当前第 ${data.current_index + 1} 首)` : "";
+  if (!tracks.length) {
+    ul.innerHTML = '<li class="empty">列表为空</li>';
+    return;
+  }
+  ul.innerHTML = "";
+  tracks.forEach((t, i) => {
+    const li = document.createElement("li");
+    if (i === data.current_index) li.className = "current";
+    li.innerHTML = `
+      <span class="pl-idx">${i + 1}</span>
+      <span class="pl-title">${escapeHtml(t.title || t.url)}</span>
+      <span class="pl-artist">${escapeHtml(t.artist || "")}</span>
+    `;
+    ul.appendChild(li);
+  });
+}
+
+function renderSysStatus(status) {
+  const grid = $("sys-status");
+  const ap = status.airplay || {};
+  const dlna = status.dlna || {};
+  const ch = status.audio_channels || {};
+  const cells = [
+    { label: "AirPlay", value: ap.running ? `${ap.name} 运行中` : "未运行", warn: !ap.running },
+    { label: "DLNA", value: dlna.running ? `${dlna.name} 运行中` : "未运行", warn: !dlna.running },
+    { label: "Stream 通道", value: ch.STREAM ? ch.STREAM.state : "—" },
+    { label: "TTS 通道", value: ch.TTS ? ch.TTS.state : "—" },
+    { label: "AI", value: status.ai_enabled ? "已启用" : "未启用" },
+  ];
+  grid.innerHTML = "";
+  cells.forEach(c => {
+    const div = document.createElement("div");
+    div.className = "status-cell";
+    div.innerHTML = `<div class="label">${c.label}</div><div class="value">${escapeHtml(c.value)}</div>`;
+    grid.appendChild(div);
+  });
+}
+
+function escapeHtml(s) {
+  if (s == null) return "";
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[c]);
+}
+
+// Controls
+
+async function togglePlayPause() {
+  try {
+    const status = await api("/api/music/status");
+    if (status.state === "PLAYING") {
+      await api("/api/music/pause", { method: "POST" });
+      toast("已暂停");
+    } else if (status.state === "PAUSED") {
+      await api("/api/music/resume", { method: "POST" });
+      toast("已恢复");
+    } else {
+      // STOPPED but has tracks → start
+      const t = await api("/api/music/tracks");
+      if (t.tracks && t.tracks.length) {
+        await api("/api/music/play", {
+          method: "POST",
+          body: JSON.stringify({ url: t.tracks[t.current_index].url }),
+        });
+        toast("开始播放");
+      } else {
+        toast("播放列表为空", true);
+      }
+    }
+    refresh();
+  } catch (e) {
+    toast("操作失败: " + e.message, true);
+  }
+}
+
+async function prevTrack() {
+  try {
+    await api("/api/music/prev", { method: "POST" });
+    refresh();
+  } catch (e) { toast("失败: " + e.message, true); }
+}
+
+async function nextTrack() {
+  try {
+    await api("/api/music/next", { method: "POST" });
+    refresh();
+  } catch (e) { toast("失败: " + e.message, true); }
+}
+
+async function stopPlay() {
+  try {
+    await api("/api/music/stop", { method: "POST" });
+    toast("已停止");
+    refresh();
+  } catch (e) { toast("失败: " + e.message, true); }
+}
+
+async function playNow() {
+  const url = $("play-url").value.trim();
+  if (!url) { toast("请填入 URL", true); return; }
+  try {
+    await api("/api/music/playlist", {
+      method: "POST",
+      body: JSON.stringify({ urls: [url], play_mode: currentMode }),
+    });
+    $("play-url").value = "";
+    toast("已开始播放");
+    refresh();
+  } catch (e) { toast("播放失败: " + e.message, true); }
+}
+
+async function addToQueue() {
+  const url = $("play-url").value.trim();
+  if (!url) { toast("请填入 URL", true); return; }
+  try {
+    await api("/api/music/play", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+    $("play-url").value = "";
+    toast("已加入队列");
+    refresh();
+  } catch (e) { toast("失败: " + e.message, true); }
+}
+
+async function setMode(mode) {
+  try {
+    await api("/api/music/play_mode", {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    });
+    currentMode = mode;
+    document.querySelectorAll(".mode-row button").forEach(b => {
+      b.classList.toggle("active", b.dataset.mode === mode);
+    });
+    toast("模式: " + mode);
+  } catch (e) { toast("失败: " + e.message, true); }
+}
+
+let volumeDebounce = null;
+function onVolumeInput() {
+  $("vol-val").textContent = $("volume").value;
+}
+function onVolumeChange() {
+  clearTimeout(volumeDebounce);
+  volumeDebounce = setTimeout(async () => {
+    const v = parseInt($("volume").value, 10);
+    try {
+      await api("/api/volume", {
+        method: "POST",
+        body: JSON.stringify({ volume: v, channel: "background" }),
+      });
+      lastVolume = v;
+    } catch (e) { toast("音量设置失败: " + e.message, true); }
+  }, 150);
+}
+
+// Polling
+
+function startPolling() {
+  refresh();
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => {
+    if (!document.hidden) refresh();
+  }, 2000);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refresh();
+});
+
+window.addEventListener("DOMContentLoaded", startPolling);
+</script>
+</body>
+</html>
