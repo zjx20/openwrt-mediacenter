@@ -23,6 +23,13 @@ class TTSEngine:
         self.config = config
         self.cache_dir = Path(config.get("cache_dir", "/tmp/tts_cache"))
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._stream_pause_hook = None
+        self._stream_resume_hook = None
+
+    def set_stream_hooks(self, on_pause, on_resume):
+        """注册 TTS 播放前后暂停/恢复 AirPlay+DLNA 的钩子（由 MediaCenter 注入）"""
+        self._stream_pause_hook = on_pause
+        self._stream_resume_hook = on_resume
 
     def _cache_path(self, text: str) -> Path:
         """生成缓存文件路径"""
@@ -50,16 +57,21 @@ class TTSEngine:
             raise ValueError(f"不支持的 TTS 引擎: {engine}")
 
     async def speak(self, text: str):
-        """合成并播放 TTS (最高优先级)"""
+        """合成并播放 TTS (最高优先级)，播放前暂停 AirPlay/DLNA，结束后恢复"""
         from mediacenter.audio.manager import AudioPriority
 
         audio_path = await self.synthesize(text)
-        await self.manager.play(AudioPriority.TTS, audio_path)
 
-        # 等待 TTS 播放完成后自动恢复低优先级
+        if self._stream_pause_hook:
+            await self._stream_pause_hook()
+
+        await self.manager.play(AudioPriority.TTS, audio_path)
         player = self.manager.channels[AudioPriority.TTS].player
         await player.wait_for_end()
         await self.manager.stop(AudioPriority.TTS)
+
+        if self._stream_resume_hook:
+            await self._stream_resume_hook()
 
     async def _edge_tts(self, text: str, output: Path) -> str:
         """使用 edge-tts 合成"""

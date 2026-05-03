@@ -6,13 +6,14 @@ set -e
 
 IMAGE_NAME="openwrt-mediacenter"
 CONTAINER_NAME="mediacenter"
+DOCKERFILE_PATH="${DOCKERFILE_PATH:-${DOCKERFILE:-Dockerfile}}"
 CONFIG_PATH="${CONFIG_PATH:-$(pwd)/config.yaml}"
-# 持久化数据目录（定时任务元数据、脚本、日志）
+# 持久化数据目录（整体挂载到 /etc/mediacenter，保存定时任务元数据、脚本、日志等）
 DATA_PATH="${DATA_PATH:-/opt/mediacenter}"
 
-# 准备宿主机持久化目录与文件，避免 Docker 把不存在的单文件挂载点创建成目录
+# 准备宿主机持久化目录与文件
 prepare_data_dirs() {
-  mkdir -p "$DATA_PATH/scripts" "$DATA_PATH/job_logs"
+  mkdir -p "$DATA_PATH" "$DATA_PATH/scripts" "$DATA_PATH/job_logs"
   if [ ! -e "$DATA_PATH/user_jobs.json" ]; then
     echo "[]" > "$DATA_PATH/user_jobs.json"
   fi
@@ -28,7 +29,8 @@ CONTAINER_IP="${CONTAINER_IP:-192.168.1.200}"
 case "${1:-run}" in
   build)
     echo "=== 构建 Docker 镜像 ==="
-    docker build -t "$IMAGE_NAME" .
+    echo "  Dockerfile: $DOCKERFILE_PATH"
+    docker build -f "$DOCKERFILE_PATH" -t "$IMAGE_NAME" .
     echo "构建完成: $IMAGE_NAME"
     ;;
 
@@ -66,13 +68,12 @@ case "${1:-run}" in
       --name "$CONTAINER_NAME" \
       --restart unless-stopped \
       --network "$MACVLAN_NET" \
+      --sysctl net.ipv6.conf.all.disable_ipv6=1 \
       --ip "$CONTAINER_IP" \
       -e PULSE_SERVER=unix:/run/pulse/native \
       -v /run/pulse:/run/pulse \
+      -v "$DATA_PATH":/etc/mediacenter \
       -v "$CONFIG_PATH":/etc/mediacenter/config.yaml:ro \
-      -v "$DATA_PATH/user_jobs.json":/etc/mediacenter/user_jobs.json \
-      -v "$DATA_PATH/scripts":/etc/mediacenter/scripts \
-      -v "$DATA_PATH/job_logs":/etc/mediacenter/job_logs \
       -v /tmp/tts_cache:/tmp/tts_cache \
       -v /tmp/news:/tmp/news \
       -e AIRPLAY_NAME="${AIRPLAY_NAME:-OpenWrt MediaCenter}" \
@@ -100,10 +101,8 @@ case "${1:-run}" in
       --network host \
       -e PULSE_SERVER=unix:/run/pulse/native \
       -v /run/pulse:/run/pulse \
+      -v "$DATA_PATH":/etc/mediacenter \
       -v "$CONFIG_PATH":/etc/mediacenter/config.yaml:ro \
-      -v "$DATA_PATH/user_jobs.json":/etc/mediacenter/user_jobs.json \
-      -v "$DATA_PATH/scripts":/etc/mediacenter/scripts \
-      -v "$DATA_PATH/job_logs":/etc/mediacenter/job_logs \
       -v /tmp/tts_cache:/tmp/tts_cache \
       -v /tmp/news:/tmp/news \
       -e AIRPLAY_NAME="${AIRPLAY_NAME:-OpenWrt MediaCenter}" \

@@ -40,7 +40,7 @@ class MediaCenter:
         # 1. 音频管理器
         self.audio_manager = AudioManager(backend=backend, pulse_sink=pulse_sink)
         default_vol = config.get("audio", "default_volume", default=50)
-        for p in AudioPriority:
+        for p in (AudioPriority.BACKGROUND, AudioPriority.TTS):
             await self.audio_manager.set_volume(p, default_vol)
         logger.info(f"音频管理器已启动 (backend={backend})")
 
@@ -63,6 +63,29 @@ class MediaCenter:
             self.audio_manager, config.get("dlna", default={})
         )
         await self.dlna.start()
+
+        # 5b. 互相注入 peer 引用，启用 AirPlay ↔ DLNA 平级打断
+        self.airplay._dlna = self.dlna
+        self.dlna._airplay = self.airplay
+
+        # 5c. TTS 钩子：speak() 前暂停 AirPlay/DLNA，结束后恢复
+        _tts_paused: dict[str, bool] = {}
+
+        async def _on_tts_pause():
+            if self.airplay and self.airplay.is_playing:
+                await self.airplay.pause()
+                _tts_paused["airplay"] = True
+            if self.dlna and self.dlna.is_streaming:
+                await self.dlna.pause()
+                _tts_paused["dlna"] = True
+
+        async def _on_tts_resume():
+            if _tts_paused.pop("airplay", False) and self.airplay:
+                await self.airplay.resume()
+            if _tts_paused.pop("dlna", False) and self.dlna:
+                await self.dlna.resume()
+
+        self.tts.set_stream_hooks(_on_tts_pause, _on_tts_resume)
 
         # 6. 定时任务
         self.scheduler = Scheduler(
@@ -157,6 +180,13 @@ def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+    # 只打印 4xx/5xx access log，过滤掉 2xx/3xx 的噪音
+    class _ErrorOnlyAccessFilter(logging.Filter):
+        def filter(self, record):
+            return bool(record.args) and record.args[-1] >= 400
+
+    logging.getLogger("uvicorn.access").addFilter(_ErrorOnlyAccessFilter())
 
     # 加载配置
     config.load(args.config)

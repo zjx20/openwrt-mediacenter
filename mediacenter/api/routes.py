@@ -265,6 +265,20 @@ async def dlna_status():
     return mc.dlna.get_status()
 
 
+@app.post("/api/stream/stop")
+async def stream_stop():
+    """暂停所有外部串流（AirPlay + DLNA），可从 Web UI 打断正在播放的串流"""
+    mc = _get_mc()
+    stopped = []
+    if mc.airplay and mc.airplay.is_playing:
+        await mc.airplay.pause()
+        stopped.append("airplay")
+    if mc.dlna and mc.dlna.is_streaming:
+        await mc.dlna.pause()
+        stopped.append("dlna")
+    return {"stopped": stopped}
+
+
 # ========== 定时任务 ==========
 
 @app.post("/api/scheduler/run/{job_type}")

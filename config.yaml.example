@@ -12,7 +12,7 @@ audio:
   # PulseAudio sink 名称，留空则使用系统默认 sink（通常就是蓝牙音箱）
   # 使用 `pactl list short sinks` 查看可用 sink
   pulse_sink: ""
-  # 默认音量 (0-100)
+  # 背景音乐 / TTS 的默认音量 (0-100)
   default_volume: 50
 
 # 背景音乐配置
@@ -29,16 +29,24 @@ airplay:
   enabled: true
   # 显示的设备名称
   name: "OpenWrt MediaCenter"
-  # shairport-sync 配置文件路径
-  config_path: "/etc/shairport-sync.conf"
+  # AirPlay 首次开始播放时的默认输出音量 (0-100)
+  # 仅作为本地初始基准，后续仍可由手机端调音量覆盖
+  default_volume: 80
+  # shairport-sync 配置文件路径；留空时使用内置启动参数
+  # Docker 自定义配置推荐挂载到: /etc/mediacenter/shairport-sync.conf
+  # 主机直装如需自定义配置，可填写: /etc/shairport-sync.conf
+  config_path: ""
   # 端口
   port: 5000
 
-# DLNA 配置 (gmrender-resurrect)
+# DLNA 配置 (upmpdcli + MPD)
 dlna:
   enabled: true
   # 显示的设备名称
   name: "OpenWrt MediaCenter"
+  # DLNA / UPnP Renderer 的默认音量 (0-100)
+  # 服务启动后、以及每次串流结束回到待机时，都会恢复到这个值
+  default_volume: 40
   # 端口
   port: 49152
 
@@ -64,7 +72,7 @@ scheduler:
   jobs:
     # 下载新闻联播
     - id: "download_news"
-      enabled: true
+      enabled: disable
       # cron 表达式: 每天 19:30 下载
       cron: "30 19 * * *"
       type: "download_news"

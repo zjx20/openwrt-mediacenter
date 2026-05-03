@@ -1,8 +1,10 @@
 """定时任务模块"""
 
 import asyncio
+import errno
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -159,12 +161,33 @@ class Scheduler:
 
     def _write_user_jobs_file(self):
         USER_JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = USER_JOBS_FILE.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(list(self._user_jobs.values()), indent=2, ensure_ascii=False),
-            encoding="utf-8",
+        payload = json.dumps(
+            list(self._user_jobs.values()),
+            indent=2,
+            ensure_ascii=False,
         )
-        tmp.replace(USER_JOBS_FILE)
+        tmp = USER_JOBS_FILE.with_name(f"{USER_JOBS_FILE.name}.tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            tmp.replace(USER_JOBS_FILE)
+        except OSError as e:
+            if e.errno != errno.EBUSY:
+                tmp.unlink(missing_ok=True)
+                raise
+            logger.warning(
+                "原子替换用户任务配置失败，回退为直接覆盖写入: %s -> %s (%s)",
+                tmp,
+                USER_JOBS_FILE,
+                e,
+            )
+            with USER_JOBS_FILE.open("w", encoding="utf-8") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+            tmp.unlink(missing_ok=True)
 
     def _script_path(self, job_id: str, runtime: str) -> Path:
         ext = ".py" if runtime == "python" else ".sh"

@@ -432,8 +432,13 @@ function renderSysStatus(status) {
   const ap = status.airplay || {};
   const dlna = status.dlna || {};
   const ch = status.audio_channels || {};
+  const airplayValue = ap.status_text || (
+    ap.state === "playing" ? `${ap.name || "AirPlay"} 串流中` :
+    (ap.state === "idle" || ap.running) ? `${ap.name || "AirPlay"} 待机中` :
+    ap.enabled === false ? "已禁用" : "未运行"
+  );
   const cells = [
-    { label: "AirPlay", value: ap.running ? `${ap.name} 运行中` : "未运行", warn: !ap.running },
+    { label: "AirPlay", value: airplayValue, warn: ap.state === "stopped" || ap.state === "disabled" },
     { label: "DLNA", value: dlna.running ? `${dlna.name} 运行中` : "未运行", warn: !dlna.running },
     { label: "Stream 通道", value: ch.STREAM ? ch.STREAM.state : "—" },
     { label: "TTS 通道", value: ch.TTS ? ch.TTS.state : "—" },

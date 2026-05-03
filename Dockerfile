@@ -1,32 +1,30 @@
-FROM python:3.11-slim
+# 基于 Alpine 的实验版本 — 用于对比镜像体积，暂不引入 multi-stage
+FROM python:3.13-alpine
 
-# 安装系统依赖（含 AirPlay / DLNA 全套组件）
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    mpv \
-    procps \
-    pulseaudio-utils \
-    alsa-utils \
-    avahi-daemon avahi-utils libnss-mdns \
-    shairport-sync \
-    gmediarender \
-    gstreamer1.0-plugins-base \
-    gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad \
-    gstreamer1.0-libav \
-    gstreamer1.0-pulseaudio \
-    dbus \
-    ffmpeg \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# 运行时依赖
+RUN apk add --no-cache \
+        mpv \
+        procps \
+        pulseaudio-utils \
+        alsa-utils \
+        avahi avahi-tools \
+        shairport-sync \
+        mpd \
+        upmpdcli \
+        dbus \
+        ffmpeg \
+        curl \
+        openssl
 
-# 安装 yt-dlp
-RUN pip install --no-cache-dir yt-dlp
+# 创建 shairport-sync 系统用户（Alpine 包没建，导致 DBus policy 报 unknown user 警告）
+RUN adduser -D -H -s /sbin/nologin shairport-sync
 
 WORKDIR /app
 
-# 安装 Python 依赖
+# 安装 yt-dlp + Python 依赖
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir yt-dlp \
+    && pip install --no-cache-dir -r requirements.txt
 
 # 复制项目代码
 COPY mediacenter/ ./mediacenter/
@@ -39,13 +37,11 @@ RUN mkdir -p /etc/mediacenter /etc/mediacenter/scripts /etc/mediacenter/job_logs
     /tmp/tts_cache /tmp/news \
     /var/run/dbus /var/run/avahi-daemon
 
-# 默认配置（运行时可挂载覆盖）
+# 默认配置
 RUN cp config.yaml.example /etc/mediacenter/config.yaml
 
-# API 端口 + AirPlay 端口
 EXPOSE 8080 5000
 
-# 健康检查
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8080/api/health || exit 1
 

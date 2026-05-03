@@ -16,12 +16,14 @@ DEFAULT_CONFIG = {
     "airplay": {
         "enabled": True,
         "name": "OpenWrt MediaCenter",
-        "config_path": "/etc/shairport-sync.conf",
+        "config_path": None,
+        "default_volume": 80,
         "port": 5000,
     },
     "dlna": {
         "enabled": True,
         "name": "OpenWrt MediaCenter",
+        "default_volume": 40,
         "port": 49152,
     },
     "tts": {

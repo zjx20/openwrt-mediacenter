@@ -1,5 +1,5 @@
 #!/bin/sh
-# 容器入口脚本 — 启动 dbus → avahi → shairport-sync → mediacenter
+# 容器入口脚本 — 启动 dbus → avahi → mediacenter（AirPlay 由应用内托管）
 
 set -e
 
@@ -25,17 +25,7 @@ for i in $(seq 1 10); do
     sleep 1
 done
 
-echo "[entrypoint] 启动 shairport-sync..."
-AIRPLAY_NAME="${AIRPLAY_NAME:-OpenWrt MediaCenter}"
-
-if [ -f /etc/mediacenter/shairport-sync.conf ]; then
-    shairport-sync -c /etc/mediacenter/shairport-sync.conf &
-else
-    # 使用 PulseAudio 后端，音频自动路由到默认 sink（蓝牙音箱等）
-    shairport-sync -a "$AIRPLAY_NAME" -o pa \
-        --metadata-pipename /tmp/shairport-sync-metadata -v &
-fi
-sleep 0.5
+echo "[entrypoint] AirPlay 将由 mediacenter 进程托管启动..."
 
 echo "[entrypoint] 启动 mediacenter..."
 exec python3 -m mediacenter "$@"

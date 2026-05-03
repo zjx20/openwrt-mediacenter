@@ -53,6 +53,32 @@ cp config.yaml.example config.yaml
 vi config.yaml
 ```
 
+推荐显式设置以下音量项，避免 AirPlay / DLNA 接入时沿用不合适的历史音量：
+
+```yaml
+audio:
+  default_volume: 50   # 仅作用于背景音乐和 TTS
+
+airplay:
+  default_volume: 80   # AirPlay 首次开始播放时的本地默认音量
+
+dlna:
+  default_volume: 40   # DLNA 串流结束回到待机后会恢复到这个值
+```
+
+默认行为说明：
+
+- `audio.default_volume` 只影响项目内部的 mpv 播放通道（背景音乐、TTS）。
+- `airplay.default_volume` 会在 AirPlay 开始播放时应用为本地输出默认值，之后仍可继续用手机端音量覆盖。
+- `dlna.default_volume` 会在服务启动时预设给 MPD，并在每次 DLNA 串流结束后恢复，保证下一次投放有稳定起点。
+
+建议按下面顺序验证：
+
+1. 重启服务后，用 iPhone 首次连接 AirPlay，确认不必先把手机音量推到 100% 才能得到正常响度。
+2. AirPlay 播放中在手机上调高或调低一次音量，确认仍能正常同步到音箱输出。
+3. 停止 AirPlay，切换到 DLNA 首次投放，确认默认音量先落在 40% 左右，而不是沿用上一次偏大的值。
+4. 在 DLNA 控制端再次调整音量，确认新音量可以覆盖默认值；停止后重新投放，默认值会再次回到 40%。
+
 ### 3. 启动
 
 ```bash
@@ -87,6 +113,8 @@ sh scripts/docker_run.sh logs
 sh scripts/docker_run.sh stop
 ```
 
+[`scripts/docker_run.sh`](scripts/docker_run.sh) 默认会准备宿主机数据目录 `/opt/mediacenter`，并将整个目录挂载到容器内 `/etc/mediacenter`。其中 `config.yaml` 仍通过独立只读挂载覆盖，其他运行数据（如 `user_jobs.json`、`scripts/`、`job_logs/`）统一落在该目录下。这样可以避免把 `user_jobs.json` 单文件 bind mount 到容器后，在更新任务状态时因原子替换触发 `Resource busy`。
+
 #### 网络模式选择
 
 容器需要让 iPhone/Mac 通过 mDNS 发现 AirPlay 设备。有两种方式：
@@ -117,6 +145,10 @@ CONTAINER_IP=192.168.1.200 AIRPLAY_NAME="客厅音箱" \
 或者手动运行：
 
 ```bash
+DATA_PATH=/opt/mediacenter
+mkdir -p "$DATA_PATH/scripts" "$DATA_PATH/job_logs"
+[ -e "$DATA_PATH/user_jobs.json" ] || echo "[]" > "$DATA_PATH/user_jobs.json"
+
 docker network create -d macvlan \
   --subnet=192.168.1.0/24 \
   --gateway=192.168.1.1 \
@@ -130,6 +162,7 @@ docker run -d \
   --ip 192.168.1.200 \
   -e PULSE_SERVER=unix:/run/pulse/native \
   -v /run/pulse:/run/pulse \
+  -v "$DATA_PATH":/etc/mediacenter \
   -v $(pwd)/config.yaml:/etc/mediacenter/config.yaml:ro \
   -e AIRPLAY_NAME="客厅音箱" \
   openwrt-mediacenter
@@ -154,16 +187,23 @@ sh scripts/docker_run.sh run-host
 或手动：
 
 ```bash
+DATA_PATH=/opt/mediacenter
+mkdir -p "$DATA_PATH/scripts" "$DATA_PATH/job_logs"
+[ -e "$DATA_PATH/user_jobs.json" ] || echo "[]" > "$DATA_PATH/user_jobs.json"
+
 docker run -d \
   --name mediacenter \
   --restart unless-stopped \
   --network host \
   -e PULSE_SERVER=unix:/run/pulse/native \
   -v /run/pulse:/run/pulse \
+  -v "$DATA_PATH":/etc/mediacenter \
   -v $(pwd)/config.yaml:/etc/mediacenter/config.yaml:ro \
   -e AIRPLAY_NAME="客厅音箱" \
   openwrt-mediacenter
 ```
+
+> **定时任务持久化说明：** 建议始终把宿主机的整个数据目录挂载到容器内 `/etc/mediacenter`，而不是分别挂载 `user_jobs.json`、`scripts/`、`job_logs/`。如果你之前使用旧版脚本，并且这三个路径本来就在同一个宿主机目录（默认就是 `/opt/mediacenter`），升级后通常只需要停止旧容器并用新版脚本重建即可，无需额外迁移数据；如果你是手写 `docker run`，请同步改成整目录挂载，否则用户任务更新 `last_run`、`last_status` 时仍可能遇到 `Resource busy`。
 
 > ⚠️ 不要使用默认的 bridge 网络 — bridge 无法转发 mDNS 多播，iPhone 将发现不了 AirPlay 设备。
 
@@ -390,7 +430,7 @@ AirPlay 让你可以从 iPhone、iPad 或 Mac 无线推送音频到 OpenWrt 设�
 
 ### Docker 部署 (已内置)
 
-如果使用 Docker 部署，shairport-sync 和 avahi-daemon 已内置在镜像中，**容器启动时自动运行**，无需额外安装。你只需要：
+如果使用 Docker 部署，shairport-sync 和 avahi-daemon 已内置在镜像中，无需额外安装。其中 avahi-daemon 会在容器启动时启动，AirPlay 的 `shairport-sync` 进程则由 `mediacenter` 应用内统一托管启动。你只需要：
 
 1. 确保使用 **macvlan** 或 **host network**（见上方 Docker 部署章节）
 2. 通过环境变量自定义 AirPlay 名称：
@@ -422,7 +462,7 @@ sh scripts/setup_airplay.sh "我的音箱"
 
 ### 手动配置 shairport-sync
 
-编辑 `/etc/shairport-sync.conf`:
+非 Docker 直装时，编辑 `/etc/shairport-sync.conf`；如果是 Docker 并想自定义配置，请挂载到 `/etc/mediacenter/shairport-sync.conf`：
 
 ```
 general = {
