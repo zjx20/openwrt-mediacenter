@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -224,6 +224,13 @@ async def tts_synthesize(req: TTSRequest):
     return {"path": path}
 
 
+@app.get("/api/tts/stream")
+async def tts_stream(text: str):
+    """TTS 流式播放（speak 路径专用）"""
+    mc = _get_mc()
+    return StreamingResponse(mc.tts.stream(text), media_type="audio/mpeg")
+
+
 @app.post("/api/tts/clear-cache")
 async def tts_clear_cache():
     mc = _get_mc()
@@ -277,6 +284,66 @@ async def stream_stop():
         await mc.dlna.pause()
         stopped.append("dlna")
     return {"stopped": stopped}
+
+
+@app.post("/api/airplay/start")
+async def airplay_start():
+    """启动 shairport-sync（若已运行则跳过）。"""
+    mc = _get_mc()
+    if not mc.airplay:
+        raise HTTPException(503, "AirPlay 未初始化")
+    await mc.airplay.start()
+    return {"status": "started", "service": "airplay"}
+
+
+@app.post("/api/airplay/stop")
+async def airplay_stop():
+    """停止 shairport-sync，断开当前会话且不再自动重启。"""
+    mc = _get_mc()
+    if not mc.airplay:
+        raise HTTPException(503, "AirPlay 未初始化")
+    await mc.airplay.stop()
+    return {"status": "stopped", "service": "airplay"}
+
+
+@app.post("/api/airplay/restart")
+async def airplay_restart():
+    """强制停止并重启 shairport-sync，断开当前 AirPlay 会话。"""
+    mc = _get_mc()
+    if not mc.airplay:
+        raise HTTPException(503, "AirPlay 未初始化")
+    await mc.airplay.restart()
+    return {"status": "restarted", "service": "airplay"}
+
+
+@app.post("/api/dlna/start")
+async def dlna_start():
+    """启动 mpd + upmpdcli（若已运行则跳过）。"""
+    mc = _get_mc()
+    if not mc.dlna:
+        raise HTTPException(503, "DLNA 未初始化")
+    await mc.dlna.start()
+    return {"status": "started", "service": "dlna"}
+
+
+@app.post("/api/dlna/stop")
+async def dlna_stop():
+    """停止 mpd + upmpdcli，断开当前会话且不再自动重启。"""
+    mc = _get_mc()
+    if not mc.dlna:
+        raise HTTPException(503, "DLNA 未初始化")
+    await mc.dlna.stop()
+    return {"status": "stopped", "service": "dlna"}
+
+
+@app.post("/api/dlna/restart")
+async def dlna_restart():
+    """强制停止并重启 mpd + upmpdcli，断开当前 DLNA 会话。"""
+    mc = _get_mc()
+    if not mc.dlna:
+        raise HTTPException(503, "DLNA 未初始化")
+    await mc.dlna.restart()
+    return {"status": "restarted", "service": "dlna"}
 
 
 # ========== 定时任务 ==========

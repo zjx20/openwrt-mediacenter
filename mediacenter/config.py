@@ -30,7 +30,9 @@ DEFAULT_CONFIG = {
         "engine": "edge-tts",
         "voice": "zh-CN-XiaoxiaoNeural",
         "rate": "+0%",
+        "pitch": "+0Hz",
         "cache_dir": "/tmp/tts_cache",
+        "cache_max_mb": 50,
         "openai": {
             "api_key": "",
             "base_url": "https://api.openai.com/v1",

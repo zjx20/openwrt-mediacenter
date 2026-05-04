@@ -50,6 +50,8 @@ class MediaCenter:
 
         # 3. TTS 引擎
         self.tts = TTSEngine(self.audio_manager, config.get("tts", default={}))
+        port = config.get("server", "port", default=8080)
+        self.tts.api_base = f"http://127.0.0.1:{port}"
         logger.info("TTS 引擎已启动")
 
         # 4. AirPlay
@@ -64,28 +66,12 @@ class MediaCenter:
         )
         await self.dlna.start()
 
-        # 5b. 互相注入 peer 引用，启用 AirPlay ↔ DLNA 平级打断
+        # 5b. 互相注入 peer 引用，启用 AirPlay ↔ DLNA 互斥硬重启
         self.airplay._dlna = self.dlna
         self.dlna._airplay = self.airplay
 
-        # 5c. TTS 钩子：speak() 前暂停 AirPlay/DLNA，结束后恢复
-        _tts_paused: dict[str, bool] = {}
-
-        async def _on_tts_pause():
-            if self.airplay and self.airplay.is_playing:
-                await self.airplay.pause()
-                _tts_paused["airplay"] = True
-            if self.dlna and self.dlna.is_streaming:
-                await self.dlna.pause()
-                _tts_paused["dlna"] = True
-
-        async def _on_tts_resume():
-            if _tts_paused.pop("airplay", False) and self.airplay:
-                await self.airplay.resume()
-            if _tts_paused.pop("dlna", False) and self.dlna:
-                await self.dlna.resume()
-
-        self.tts.set_stream_hooks(_on_tts_pause, _on_tts_resume)
+        # 注：TTS 不再显式暂停 AirPlay / DLNA / 背景音乐，
+        # 改由 PulseAudio module-role-ducking 在系统层做音量自动压制。
 
         # 6. 定时任务
         self.scheduler = Scheduler(
@@ -193,6 +179,9 @@ def main():
 
     host = args.host or config.get("server", "host", default="0.0.0.0")
     port = args.port or config.get("server", "port", default=8080)
+    # 将命令行参数解析出的最终值写回 config，供 start() 中各组件读取
+    config._data["server"]["host"] = host
+    config._data["server"]["port"] = port
 
     uvicorn.run(
         app,

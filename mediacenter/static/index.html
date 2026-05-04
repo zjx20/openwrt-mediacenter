@@ -163,6 +163,61 @@
     border-color: var(--accent);
   }
 
+  /* TTS form */
+  .tts-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .tts-form textarea {
+    width: 100%;
+    min-height: 88px;
+    font: inherit;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 9px 10px;
+    background: #fff;
+    resize: vertical;
+  }
+  .tts-form textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .tts-toolbar {
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .tts-targets,
+  .tts-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .tts-label {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .tts-targets button.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .tts-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .hint {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
   /* Playlist */
   .playlist {
     list-style: none;
@@ -225,6 +280,16 @@
     margin-bottom: 4px;
   }
   .status-cell .value { font-weight: 600; }
+  .status-cell .cell-actions {
+    margin-top: 8px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .status-cell .cell-action {
+    font-size: 11px;
+    padding: 3px 10px;
+  }
 
   .toast {
     position: fixed;
@@ -301,6 +366,29 @@
   </div>
 </div>
 
+<!-- TTS -->
+<div class="card">
+  <h2>TTS 投递</h2>
+  <div class="tts-form">
+    <textarea id="tts-text" placeholder="输入要播报的文本，例如：晚饭时间到了，请到客厅集合。"></textarea>
+    <div class="tts-toolbar">
+      <div class="tts-targets">
+        <span class="tts-label">播放目标</span>
+        <button id="tts-target-device" class="active" type="button" onclick="setTtsTarget('device')">设备音箱</button>
+        <button id="tts-target-browser" type="button" onclick="setTtsTarget('browser')">当前浏览器</button>
+      </div>
+      <div class="tts-actions">
+        <button id="tts-submit" class="primary" type="button" onclick="submitTts()">投递到设备音箱</button>
+        <button id="tts-stop-browser" type="button" onclick="stopBrowserTts()" disabled>停止本地播放</button>
+      </div>
+    </div>
+    <div class="tts-status-row">
+      <span id="tts-status" class="badge muted">将从设备音箱播出</span>
+    </div>
+    <div id="tts-hint" class="hint">设备音箱模式会调用服务端 TTS 播放链路，由设备侧音箱实际播出。</div>
+  </div>
+</div>
+
 <!-- Playlist -->
 <div class="card">
   <h2>播放列表 <span id="pl-count" style="color:var(--muted);font-weight:normal"></span></h2>
@@ -322,6 +410,9 @@ const $ = (id) => document.getElementById(id);
 let currentMode = "repeat_all";
 let lastVolume = 50;
 let pollTimer = null;
+let ttsTarget = "device";
+let ttsSendBusy = false;
+let browserTtsAudio = null;
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -437,20 +528,77 @@ function renderSysStatus(status) {
     (ap.state === "idle" || ap.running) ? `${ap.name || "AirPlay"} 待机中` :
     ap.enabled === false ? "已禁用" : "未运行"
   );
+  const dlnaValue = dlna.status_text || (
+    dlna.running ? `${dlna.name || "DLNA"} 运行中` :
+    dlna.enabled === false ? "已禁用" : "未运行"
+  );
+
+  function serviceActions(svc, running, enabled) {
+    if (enabled === false) return [];
+    if (running) return [
+      { label: "停止",   action: "stop",    cls: "danger" },
+      { label: "重启",   action: "restart", cls: "" },
+    ];
+    return [{ label: "启动", action: "start", cls: "primary" }];
+  }
+
   const cells = [
-    { label: "AirPlay", value: airplayValue, warn: ap.state === "stopped" || ap.state === "disabled" },
-    { label: "DLNA", value: dlna.running ? `${dlna.name} 运行中` : "未运行", warn: !dlna.running },
+    {
+      label: "AirPlay",
+      value: airplayValue,
+      actions: serviceActions("airplay", ap.running, ap.enabled),
+      service: "airplay",
+    },
+    {
+      label: "DLNA",
+      value: dlnaValue,
+      actions: serviceActions("dlna", dlna.running, dlna.enabled),
+      service: "dlna",
+    },
     { label: "Stream 通道", value: ch.STREAM ? ch.STREAM.state : "—" },
-    { label: "TTS 通道", value: ch.TTS ? ch.TTS.state : "—" },
-    { label: "AI", value: status.ai_enabled ? "已启用" : "未启用" },
+    { label: "TTS 通道",   value: ch.TTS   ? ch.TTS.state   : "—" },
+    { label: "AI",         value: status.ai_enabled ? "已启用" : "未启用" },
   ];
+
   grid.innerHTML = "";
   cells.forEach(c => {
     const div = document.createElement("div");
     div.className = "status-cell";
-    div.innerHTML = `<div class="label">${c.label}</div><div class="value">${escapeHtml(c.value)}</div>`;
+    div.innerHTML = `<div class="label">${escapeHtml(c.label)}</div><div class="value">${escapeHtml(c.value)}</div>`;
+    if (c.actions && c.actions.length) {
+      const row = document.createElement("div");
+      row.className = "cell-actions";
+      c.actions.forEach(a => {
+        const btn = document.createElement("button");
+        btn.className = "cell-action" + (a.cls ? " " + a.cls : "");
+        btn.textContent = a.label;
+        btn.addEventListener("click", () => serviceControl(c.service, a.action, btn));
+        row.appendChild(btn);
+      });
+      div.appendChild(row);
+    }
     grid.appendChild(div);
   });
+}
+
+async function serviceControl(service, action, btn) {
+  const label = service === "airplay" ? "AirPlay" : "DLNA";
+  const actionLabel = { start: "启动", stop: "停止", restart: "重启" }[action] || action;
+  if (action === "stop" || action === "restart") {
+    if (!confirm(`确定${actionLabel} ${label}？当前会话会被切断。`)) return;
+  }
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = actionLabel + "中...";
+  try {
+    await api(`/api/${service}/${action}`, { method: "POST" });
+    toast(`${label} 已${actionLabel}`);
+    refresh();
+  } catch (e) {
+    toast(`${label} ${actionLabel}失败: ${e.message}`, true);
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
 }
 
 function escapeHtml(s) {
@@ -458,6 +606,149 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   })[c]);
+}
+
+function defaultTtsStatus() {
+  return ttsTarget === "browser"
+    ? "将在当前浏览器标签页本地播出"
+    : "将从设备音箱播出";
+}
+
+function setTtsStatus(message, tone = "muted") {
+  const el = $("tts-status");
+  if (!el) return;
+  el.textContent = message;
+  el.className = "badge " + tone;
+}
+
+function renderTtsControls() {
+  const deviceBtn = $("tts-target-device");
+  const browserBtn = $("tts-target-browser");
+  const submitBtn = $("tts-submit");
+  const stopBtn = $("tts-stop-browser");
+  const hint = $("tts-hint");
+
+  if (!deviceBtn || !browserBtn || !submitBtn || !stopBtn || !hint) return;
+
+  deviceBtn.classList.toggle("active", ttsTarget === "device");
+  browserBtn.classList.toggle("active", ttsTarget === "browser");
+  deviceBtn.disabled = ttsSendBusy;
+  browserBtn.disabled = ttsSendBusy;
+
+  submitBtn.disabled = ttsSendBusy;
+  submitBtn.textContent = ttsSendBusy
+    ? (ttsTarget === "browser" ? "准备本地播放..." : "设备播报中...")
+    : (ttsTarget === "browser" ? "在当前浏览器播放" : "投递到设备音箱");
+
+  stopBtn.disabled = !browserTtsAudio;
+  hint.textContent = ttsTarget === "browser"
+    ? "浏览器模式只在当前打开的页面本地播放，不会从设备音箱播出，也不会占用服务端 TTS 通道。"
+    : "设备音箱模式会调用服务端 TTS 播放链路，由设备侧音箱实际播出。";
+}
+
+function setTtsTarget(target) {
+  ttsTarget = target === "browser" ? "browser" : "device";
+  renderTtsControls();
+  if (!browserTtsAudio && !ttsSendBusy) {
+    setTtsStatus(defaultTtsStatus(), "muted");
+  }
+}
+
+function releaseBrowserTtsAudio(audio, { resetSource = false } = {}) {
+  if (!audio) return;
+  try { audio.pause(); } catch (_) {}
+  if (resetSource) {
+    try {
+      audio.removeAttribute("src");
+      audio.load();
+    } catch (_) {}
+  }
+  if (browserTtsAudio === audio) {
+    browserTtsAudio = null;
+  }
+  renderTtsControls();
+}
+
+function stopBrowserTts(silent = false) {
+  const audio = browserTtsAudio;
+  if (!audio) return;
+  releaseBrowserTtsAudio(audio, { resetSource: true });
+  setTtsStatus("已停止当前浏览器本地播放", "muted");
+  if (!silent) toast("已停止本地播放");
+}
+
+function handleBrowserTtsError(audio, message) {
+  if (browserTtsAudio !== audio) return;
+  releaseBrowserTtsAudio(audio, { resetSource: true });
+  setTtsStatus("当前浏览器播放失败", "warn");
+  toast(message || "浏览器播放失败，请稍后重试", true);
+}
+
+async function submitTts() {
+  const text = $("tts-text").value.trim();
+  if (!text) {
+    toast("请输入要播报的文本", true);
+    return;
+  }
+
+  if (browserTtsAudio) {
+    stopBrowserTts(true);
+  }
+
+  if (ttsTarget === "device") {
+    ttsSendBusy = true;
+    renderTtsControls();
+    setTtsStatus("设备音箱播报中...", "warn");
+    try {
+      await api("/api/tts/speak", {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      });
+      setTtsStatus("设备音箱播报完成", "ok");
+      toast("TTS 已投递到设备音箱");
+    } catch (e) {
+      setTtsStatus(defaultTtsStatus(), "muted");
+      toast("TTS 投递失败: " + e.message, true);
+    } finally {
+      ttsSendBusy = false;
+      renderTtsControls();
+    }
+    return;
+  }
+
+  ttsSendBusy = true;
+  renderTtsControls();
+  setTtsStatus("正在准备当前浏览器播放...", "warn");
+
+  const params = new URLSearchParams({ text });
+  const audio = new Audio(`/api/tts/stream?${params.toString()}`);
+  audio.preload = "none";
+  audio.addEventListener("playing", () => {
+    if (browserTtsAudio !== audio) return;
+    setTtsStatus("正在当前浏览器本地播放", "ok");
+  });
+  audio.addEventListener("ended", () => {
+    if (browserTtsAudio !== audio) return;
+    releaseBrowserTtsAudio(audio);
+    setTtsStatus("当前浏览器播放已结束", "muted");
+  });
+  audio.addEventListener("error", () => {
+    handleBrowserTtsError(audio, "浏览器播放失败，请稍后重试");
+  });
+
+  browserTtsAudio = audio;
+  renderTtsControls();
+  try {
+    const playPromise = audio.play();
+    if (playPromise) await playPromise;
+    setTtsStatus("正在当前浏览器本地播放", "ok");
+    toast("TTS 已在当前浏览器播放");
+  } catch (e) {
+    handleBrowserTtsError(audio, "浏览器播放失败: " + (e.message || "请检查浏览器自动播放权限"));
+  } finally {
+    ttsSendBusy = false;
+    renderTtsControls();
+  }
 }
 
 // Controls
@@ -575,6 +866,8 @@ function onVolumeChange() {
 // Polling
 
 function startPolling() {
+  renderTtsControls();
+  setTtsStatus(defaultTtsStatus(), "muted");
   refresh();
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => {
@@ -584,6 +877,10 @@ function startPolling() {
 
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
+});
+
+window.addEventListener("beforeunload", () => {
+  stopBrowserTts(true);
 });
 
 window.addEventListener("DOMContentLoaded", startPolling);

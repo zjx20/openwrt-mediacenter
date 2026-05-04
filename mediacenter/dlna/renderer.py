@@ -7,7 +7,9 @@ upmpdcli 实现 UPnP MediaRenderer / OpenHome 协议层，把 DLNA 控制端
 
 import asyncio
 import logging
+import random
 import signal
+import string
 from pathlib import Path
 
 from .proxy import DLNAProxy
@@ -38,10 +40,11 @@ class DLNARenderer:
         self._is_streaming = False
         # peer 由 MediaCenter 在启动后注入
         self._airplay = None
-        # 标记是否由本渲染器主动暂停了 AirPlay，用于停止时恢复
-        self._paused_airplay = False
+        self._pending_peer_restart: asyncio.Task | None = None
         # URL 投屏代理：上游断连时自动 Range 续传，避免 ffmpeg "partial file"
         self._proxy = DLNAProxy()
+        self._restart_lock = asyncio.Lock()
+        self._active_name: str | None = None
 
     def _default_volume(self) -> int:
         return max(0, min(100, int(self.config.get("default_volume", 40))))
@@ -51,7 +54,10 @@ class DLNARenderer:
             logger.info("DLNA 未启用")
             return
 
-        name = self.config.get("name", "OpenWrt MediaCenter")
+        base_name = self.config.get("name", "OpenWrt MediaCenter")
+        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+        name = f"{base_name}-{suffix}"
+        self._active_name = name
         port = self.config.get("port", 49152)
 
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
@@ -135,6 +141,7 @@ class DLNARenderer:
             '    type          "pulse"',
             '    name          "PulseAudio"',
             '    mixer_type    "software"',
+            '    media_role    "dlna"',
         ]
         if pulse_sink:
             lines.append(f'    sink          "{pulse_sink}"')
@@ -225,6 +232,16 @@ class DLNARenderer:
                 return
             except Exception as e:
                 logger.debug(f"MPD 状态监控重连中: {e}")
+                # MPD 不可达：状态显然不再可信，回到 idle 并释放联动
+                if self._is_streaming:
+                    self._is_playing = False
+                    self._is_streaming = False
+                    try:
+                        await self._on_stream_end()
+                    except Exception as cleanup_err:
+                        logger.warning(f"DLNA 状态收尾失败: {cleanup_err}")
+                else:
+                    self._is_playing = False
                 await asyncio.sleep(2)
             finally:
                 if writer:
@@ -237,34 +254,36 @@ class DLNARenderer:
     async def _on_stream_start(self):
         logger.info("DLNA 开始串流")
 
-        # 打断 AirPlay（平级优先级，后到打断先到）
-        if self._airplay and self._airplay.is_playing:
-            await self._airplay.pause()
-            self._paused_airplay = True
+        # 硬重启 AirPlay 服务：kill shairport-sync，迫使手机端重新发起会话
+        if self._airplay:
+            self._pending_peer_restart = asyncio.create_task(self._restart_peer_airplay())
+            self._pending_peer_restart.add_done_callback(
+                lambda t: setattr(self, "_pending_peer_restart", None)
+            )
 
-        # 暂停背景音乐（若 AirPlay 已把它暂停，player.is_playing 为 False，幂等）
+        # 暂停 mpv 背景音乐
         from mediacenter.audio.manager import AudioPriority
         ch = self.manager.channels[AudioPriority.BACKGROUND]
         if ch.player.is_playing:
             ch.was_playing = True
-            await ch.player.pause()
+            await self.manager.pause(AudioPriority.BACKGROUND)
+
+    async def _restart_peer_airplay(self):
+        try:
+            await self._airplay.restart()
+        except Exception as e:
+            logger.warning(f"DLNA 起流时重启 AirPlay 失败: {e}")
 
     async def _on_stream_end(self):
         logger.info("DLNA 停止串流")
         await self._apply_default_volume("stream ended")
 
-        # 恢复被我们暂停的 AirPlay
-        if self._paused_airplay and self._airplay:
-            self._paused_airplay = False
-            await self._airplay.resume()
-
-        # 只在 AirPlay 也不在播放时才恢复背景音乐
-        if not (self._airplay and self._airplay.is_playing):
-            from mediacenter.audio.manager import AudioPriority
-            ch = self.manager.channels[AudioPriority.BACKGROUND]
-            if ch.was_playing:
-                ch.was_playing = False
-                await ch.player.resume()
+        # 恢复 mpv 背景音乐（只看自己是否曾暂停过它）
+        from mediacenter.audio.manager import AudioPriority
+        ch = self.manager.channels[AudioPriority.BACKGROUND]
+        if ch.was_playing:
+            ch.was_playing = False
+            await self.manager.resume(AudioPriority.BACKGROUND)
 
     async def _wait_mpd_ready(self, timeout: float = 5.0):
         loop = asyncio.get_event_loop()
@@ -307,6 +326,34 @@ class DLNARenderer:
     def is_streaming(self) -> bool:
         return self._is_streaming
 
+    def _state(self) -> str:
+        if not self.config.get("enabled", True):
+            return "disabled"
+        mpd_alive = self._mpd_process is not None and self._mpd_process.returncode is None
+        up_alive = (
+            self._upmpdcli_process is not None and self._upmpdcli_process.returncode is None
+        )
+        if not (mpd_alive and up_alive):
+            return "stopped"
+        if self._is_playing:
+            return "playing"
+        if self._is_streaming:
+            return "paused"
+        return "idle"
+
+    def _status_text(self) -> str:
+        state = self._state()
+        name = self._active_name or self.config.get("name", "OpenWrt MediaCenter")
+        if state == "disabled":
+            return "已禁用"
+        if state == "playing":
+            return f"{name} 串流中"
+        if state == "paused":
+            return f"{name} 已暂停"
+        if state == "idle":
+            return f"{name} 待机中"
+        return "未运行"
+
     def get_status(self) -> dict:
         def alive(p):
             return p is not None and p.returncode is None
@@ -317,7 +364,10 @@ class DLNARenderer:
             "mpd_running": alive(self._mpd_process),
             "upmpdcli_running": alive(self._upmpdcli_process),
             "is_playing": self._is_playing,
-            "name": self.config.get("name", "OpenWrt MediaCenter"),
+            "is_streaming": self._is_streaming,
+            "state": self._state(),
+            "status_text": self._status_text(),
+            "name": self._active_name or self.config.get("name", "OpenWrt MediaCenter"),
         }
 
     async def stop(self):
@@ -343,4 +393,18 @@ class DLNARenderer:
 
         await self._proxy.stop()
 
+        self._mpd_process = None
+        self._upmpdcli_process = None
+        self._is_playing = False
+        self._is_streaming = False
+        self._active_name = None
+
         logger.info("DLNA 服务已停止")
+
+    async def restart(self):
+        """强制停止并重启 mpd + upmpdcli，用于打断当前串流或恢复异常状态。"""
+        async with self._restart_lock:
+            logger.info("DLNA 服务重启中...")
+            await self.stop()
+            await self.start()
+            logger.info("DLNA 服务重启完成")

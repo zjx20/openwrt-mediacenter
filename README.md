@@ -12,22 +12,53 @@
 | 🔊 TTS | 文字转语音播报 (edge-tts/OpenAI) | ✅ |
 | ⏰ 定时任务 | 定时下载新闻联播等 | ✅ |
 | 🤖 AI 代理 | GPT 驱动的智能控制 | ✅ |
-| 🔀 优先级管理 | 自动暂停/恢复，TTS > AirPlay > 背景音乐 | ✅ |
+| 🔀 打断规则 | AirPlay / DLNA 互相硬重启互斥；mpv 被动让位 | ✅ |
 
-### 音频优先级体系
+### 音频流打断规则
 
+| 触发事件 | 对 AirPlay | 对 DLNA | 对 mpv 背景音乐 |
+|---------|-----------|---------|----------------|
+| AirPlay 开始播放 | — | 重启服务（换设备名，断开手机端） | 暂停 |
+| AirPlay 停止     | — | — | 恢复（若曾被本次打断暂停） |
+| DLNA 开始串流    | 重启服务（kill shairport-sync） | — | 暂停 |
+| DLNA 停止        | — | — | 恢复（若曾被本次打断暂停） |
+| TTS 开始 / 结束  | —（不暂停） | —（不暂停） | —（不暂停，只被 PA 自动压低音量） |
+| mpv 开始 / 停止  | — | — | — |
+
+要点：
+
+- **AirPlay 与 DLNA 之间是硬重启互斥**，不再用软暂停。原因：软暂停时手机端发现"暂停"
+  状态会立刻自动 resume，打断不彻底；DLNA 重启时会换上新的随机后缀设备名（例如
+  `客厅-a3f9` → `客厅-7k2m`），手机被迫重新选择目标，避免自动重连。
+- **mpv 背景音乐被动让位** AirPlay / DLNA：起流时暂停，结束后恢复。
+- **mpv 自身的播放、暂停、停止操作不会触发 AirPlay / DLNA 服务的状态变化** ——
+  调 `/api/music/play` 或 `/api/music/stop` 不会重启对端服务。
+- **TTS 不再显式打断任何流。** TTS 走独立 mpv 通道，输出 PulseAudio 流时附带
+  `media.role=tts` 属性。其他流（背景音乐 `role=background`、AirPlay `role=airplay`、
+  DLNA `role=dlna`）由 PulseAudio 在系统层自动 ducking：检测到 `role=tts` 时把
+  这三类角色的音量压低（默认 -20dB），TTS 播完后立即恢复原音量。整个过程不暂停
+  任何播放，背景音乐和正在投屏的会话都会继续，只是被压低到背景音。
+
+#### PulseAudio ducking 配置
+
+容器入口脚本 [`scripts/entrypoint.sh`](scripts/entrypoint.sh) 在启动时会自动向
+宿主机 PulseAudio 加载 `module-role-ducking`：
+
+```bash
+pactl load-module module-role-ducking \
+    trigger_roles=tts \
+    ducking_roles=background,airplay,dlna \
+    volume=-20dB \
+    global=true
 ```
-优先级高 ▲  TTS 播报 (priority=2)
-         │   ├── 播放时自动暂停所有低优先级
-         │   └── 播完自动恢复
-         │
-         │  AirPlay / DLNA 推流 (priority=1)
-         │   ├── 播放时自动暂停背景音乐
-         │   └── 停止后自动恢复背景音乐
-         │
-优先级低 ▼  背景音乐 (priority=0)
-              └── 持续循环播放，被打断后自动恢复
-```
+
+- 若宿主机 PA 已经加载过该模块（例如在 `default.pa` 里预设），脚本会跳过；
+  若加载失败（PA 不支持该模块、权限不足等）也只打印一行警告并继续。
+- 默认压低 20dB；可通过环境变量 `TTS_DUCK_VOLUME` 覆盖，例如
+  `-e TTS_DUCK_VOLUME=-30dB` 让 TTS 期间其他流更安静。
+- 非 Docker / 直装方式部署时，需要自行在宿主机 PA 配置同样的模块（写到
+  `~/.config/pulse/default.pa` 或 `/etc/pulse/default.pa`），否则 TTS 期间
+  其他音频不会被自动压低。
 
 ## 快速开始
 
@@ -380,6 +411,12 @@ curl -X POST http://localhost:8080/api/tts/synthesize \
 # 清除 TTS 缓存
 curl -X POST http://localhost:8080/api/tts/clear-cache
 ```
+
+Web UI 中也提供了 TTS 投递卡片：打开 [`/ui/`](mediacenter/static/index.html) 后，可直接输入播报文本，并在“设备音箱”和“当前浏览器”之间切换播放目标。
+
+- 选择“设备音箱”时，前端调用 [`/api/tts/speak`](mediacenter/api/routes.py:211)，声音从设备侧输出。
+- 选择“当前浏览器”时，前端直接播放 [`/api/tts/stream`](mediacenter/api/routes.py:227) 返回的音频流，只会在当前页面本地播出。
+- 浏览器本地播放依赖页面的音频播放权限；若浏览器拦截自动播放，按页面提示重试即可。
 
 ### 音量控制
 

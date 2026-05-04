@@ -14,7 +14,7 @@ class BackgroundPlayer:
     """背景音乐播放器
 
     负责管理播放列表，处理自动切歌逻辑。
-    当被高优先级音频打断时自动暂停，恢复时继续播放。
+    TTS 播报时背景音乐不会被暂停，仅由 PulseAudio ducking 自动压低音量。
     """
 
     def __init__(self, manager: AudioManager):
@@ -22,31 +22,14 @@ class BackgroundPlayer:
         self.playlist = Playlist()
         self._task: asyncio.Task | None = None
         self._playing = False
-        self._paused_by_higher = False
-
-        # 注册打断回调
-        manager.set_background_callbacks(
-            on_pause=self._on_interrupted,
-            on_resume=self._on_resumed,
-        )
 
         # 监听播放结束事件，自动切下一首
         bg_player = manager.channels[AudioPriority.BACKGROUND].player
         bg_player.on_event("end-file", self._on_track_end)
 
-    async def _on_interrupted(self):
-        """被高优先级打断"""
-        self._paused_by_higher = True
-        logger.info("背景音乐被打断")
-
-    async def _on_resumed(self):
-        """高优先级结束，恢复播放"""
-        self._paused_by_higher = False
-        logger.info("背景音乐已恢复")
-
     async def _on_track_end(self, event: dict):
         """当前曲目播放结束，自动播放下一首"""
-        if not self._playing or self._paused_by_higher:
+        if not self._playing:
             return
 
         reason = event.get("reason", "")
@@ -129,7 +112,6 @@ class BackgroundPlayer:
         track = self.playlist.current_track
         return {
             "playing": self._playing,
-            "paused_by_higher": self._paused_by_higher,
             "state": bg.player.state.name,
             "play_mode": self.playlist.play_mode.value,
             "current_track": {

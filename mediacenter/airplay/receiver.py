@@ -25,9 +25,9 @@ class AirPlayReceiver:
     """AirPlay 接收器
 
     封装 shairport-sync 的启动/停止，监听播放状态变化。
-    - 开始播放：暂停 DLNA（via peer）和 BACKGROUND
-    - 停止播放：恢复 DLNA 和 BACKGROUND
-    - 支持被外部（DLNA、TTS）通过 pause()/resume() 打断
+    - 开始播放：硬重启 DLNA 服务（换设备名，断开手机端），并暂停 mpv 背景音乐
+    - 停止播放：恢复 mpv 背景音乐
+    - 支持被外部（TTS）通过 pause()/resume() 打断
     """
 
     def __init__(self, audio_manager, config: dict):
@@ -35,18 +35,19 @@ class AirPlayReceiver:
         self.config = config
         self._process: asyncio.subprocess.Process | None = None
         self._monitor_task: asyncio.Task | None = None
+        self._mpris_task: asyncio.Task | None = None
         self._is_playing = False
         self._metadata_pipe = "/tmp/shairport-sync-metadata"
         # peer 由 MediaCenter 在启动后注入
         self._dlna = None
-        # 标记是否由本接收器主动暂停了 MPD，用于停止时恢复
-        self._paused_mpd = False
+        self._pending_peer_restart: asyncio.Task | None = None
         self._active_config_path: str | None = None
         self._runtime_config_path: str | None = None
         self._last_exit_code: int | None = None
         self._last_error: str | None = None
         self._recent_output: deque[str] = deque(maxlen=20)
         self._volume_apply_task: asyncio.Task | None = None
+        self._restart_lock = asyncio.Lock()
 
     def _resolve_name(self) -> str:
         return os.environ.get(
@@ -84,6 +85,7 @@ class AirPlayReceiver:
             f'    output_backend = "{output_backend}";',
             "    drift_tolerance_in_seconds = 0.002;",
             "    resync_threshold_in_seconds = 0.050;",
+            "    volume_range_db = 30;",
             "};",
             "",
             "metadata = {",
@@ -107,6 +109,7 @@ class AirPlayReceiver:
                 "",
                 "pa = {",
                 '    application_name = "shairport-sync";',
+                '    media_role = "airplay";',
             ])
             if pulse_sink:
                 escaped_sink = pulse_sink.replace('"', '\\"')
@@ -253,6 +256,7 @@ class AirPlayReceiver:
             stderr=asyncio.subprocess.STDOUT,
         )
         self._monitor_task = asyncio.create_task(self._monitor_output())
+        self._mpris_task = asyncio.create_task(self._monitor_mpris())
 
     async def _wait_for_stable_startup(self, config_path: str | None) -> bool:
         if not self._process:
@@ -356,6 +360,84 @@ class AirPlayReceiver:
         except FileNotFoundError:
             logger.error("shairport-sync 未安装! 请运行: opkg install shairport-sync")
 
+    async def _monitor_mpris(self):
+        """订阅 shairport-sync 的 MPRIS PlaybackStatus，作为 _is_playing 的权威来源。
+
+        stderr 的 "Play Begin/End" 标记在客户端异常断开（飞行模式、出范围）
+        时不一定立刻发出，会卡住状态最多到 session_timeout。MPRIS 信号则是
+        shairport-sync 自身维护的实时状态。
+        """
+        from dbus_next.aio import MessageBus
+        from dbus_next import BusType
+
+        bus = None
+        try:
+            # 等 shairport-sync 把 MPRIS 服务注册上来（最多 30s）
+            for attempt in range(30):
+                if not self._process_running():
+                    return
+                try:
+                    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+                    intr = await bus.introspect(MPRIS_BUS_NAME, MPRIS_OBJECT)
+                    break
+                except Exception as e:
+                    if bus:
+                        try:
+                            bus.disconnect()
+                        except Exception:
+                            pass
+                        bus = None
+                    if attempt == 0:
+                        logger.debug(f"AirPlay MPRIS 暂未就绪，重试中: {e}")
+                    await asyncio.sleep(1)
+            else:
+                logger.debug("AirPlay MPRIS 未在 30s 内就绪，放弃订阅")
+                return
+
+            proxy = bus.get_proxy_object(MPRIS_BUS_NAME, MPRIS_OBJECT, intr)
+            props_iface = proxy.get_interface("org.freedesktop.DBus.Properties")
+
+            def on_props_changed(interface_name, changed_props, invalidated):
+                if interface_name != MPRIS_PLAYER_IFACE:
+                    return
+                if "PlaybackStatus" not in changed_props:
+                    return
+                value = changed_props["PlaybackStatus"].value
+                asyncio.create_task(self._reconcile_mpris_status(value))
+
+            props_iface.on_properties_changed(on_props_changed)
+
+            try:
+                player_iface = proxy.get_interface(MPRIS_PLAYER_IFACE)
+                initial = await player_iface.get_playback_status()
+                await self._reconcile_mpris_status(initial)
+            except Exception as e:
+                logger.debug(f"AirPlay MPRIS 初始 PlaybackStatus 读取失败: {e}")
+
+            # 保持任务存活，直到被 stop() 取消或进程退出
+            while self._process_running():
+                await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning(f"AirPlay MPRIS 监控异常: {e}")
+        finally:
+            if bus:
+                try:
+                    bus.disconnect()
+                except Exception:
+                    pass
+
+    async def _reconcile_mpris_status(self, status: str):
+        """根据 MPRIS PlaybackStatus 修正 _is_playing 状态"""
+        is_playing_now = status == "Playing"
+        if is_playing_now and not self._is_playing:
+            logger.debug("AirPlay MPRIS 触发 play_start 修正")
+            await self._on_play_start()
+        elif not is_playing_now and self._is_playing:
+            logger.debug(f"AirPlay MPRIS 触发 play_end 修正 (status={status})")
+            await self._on_play_end()
+
     async def pause(self):
         """通过 D-Bus MPRIS 暂停 shairport-sync（由 DLNA 或 TTS 调用）"""
         try:
@@ -419,6 +501,12 @@ class AirPlayReceiver:
                         self._format_recent_output()
                         or f"shairport-sync exited with code {self._process.returncode}"
                     )
+                # 进程已死：若仍标记为 playing，触发收尾以恢复 DLNA / 背景音乐
+                if self._is_playing:
+                    try:
+                        await self._on_play_end()
+                    except Exception as e:
+                        logger.warning(f"AirPlay 进程退出后状态收尾失败: {e}")
 
     async def _on_play_start(self):
         if self._is_playing:
@@ -430,17 +518,25 @@ class AirPlayReceiver:
             self._volume_apply_task.cancel()
         self._volume_apply_task = asyncio.create_task(self._apply_default_volume())
 
-        # 打断 DLNA（平级优先级，后到打断先到）
-        if self._dlna and self._dlna.is_streaming:
-            await self._dlna.pause()
-            self._paused_mpd = True
+        # 硬重启 DLNA 服务：换随机后缀的设备名，断开手机端，避免自动重连
+        if self._dlna:
+            self._pending_peer_restart = asyncio.create_task(self._restart_peer_dlna())
+            self._pending_peer_restart.add_done_callback(
+                lambda t: setattr(self, "_pending_peer_restart", None)
+            )
 
-        # 暂停背景音乐（若 DLNA 已把它暂停，player.is_playing 为 False，幂等）
+        # 暂停 mpv 背景音乐
         from mediacenter.audio.manager import AudioPriority
         ch = self.manager.channels[AudioPriority.BACKGROUND]
         if ch.player.is_playing:
             ch.was_playing = True
-            await ch.player.pause()
+            await self.manager.pause(AudioPriority.BACKGROUND)
+
+    async def _restart_peer_dlna(self):
+        try:
+            await self._dlna.restart()
+        except Exception as e:
+            logger.warning(f"AirPlay 起播时重启 DLNA 失败: {e}")
 
     async def _on_play_end(self):
         if not self._is_playing:
@@ -448,18 +544,12 @@ class AirPlayReceiver:
         self._is_playing = False
         logger.info("AirPlay 停止播放")
 
-        # 恢复被我们暂停的 DLNA
-        if self._paused_mpd and self._dlna:
-            self._paused_mpd = False
-            await self._dlna.resume()
-
-        # 只在 DLNA 也不在串流时才恢复背景音乐
-        if not (self._dlna and self._dlna.is_streaming):
-            from mediacenter.audio.manager import AudioPriority
-            ch = self.manager.channels[AudioPriority.BACKGROUND]
-            if ch.was_playing:
-                ch.was_playing = False
-                await ch.player.resume()
+        # 恢复 mpv 背景音乐（只看自己是否曾暂停过它）
+        from mediacenter.audio.manager import AudioPriority
+        ch = self.manager.channels[AudioPriority.BACKGROUND]
+        if ch.was_playing:
+            ch.was_playing = False
+            await self.manager.resume(AudioPriority.BACKGROUND)
 
     @property
     def is_playing(self) -> bool:
@@ -491,6 +581,13 @@ class AirPlayReceiver:
             except asyncio.CancelledError:
                 pass
 
+        if self._mpris_task:
+            self._mpris_task.cancel()
+            try:
+                await self._mpris_task
+            except asyncio.CancelledError:
+                pass
+
         if self._monitor_task:
             self._monitor_task.cancel()
             try:
@@ -509,8 +606,8 @@ class AirPlayReceiver:
                     pass
 
         self._is_playing = False
-        self._paused_mpd = False
         self._monitor_task = None
+        self._mpris_task = None
         self._volume_apply_task = None
         self._process = None
 
@@ -522,3 +619,11 @@ class AirPlayReceiver:
         self._runtime_config_path = None
 
         logger.info("AirPlay 服务已停止")
+
+    async def restart(self):
+        """强制停止并重启 shairport-sync，用于打断卡死会话或异常状态恢复。"""
+        async with self._restart_lock:
+            logger.info("AirPlay 服务重启中...")
+            await self.stop()
+            await self.start()
+            logger.info("AirPlay 服务重启完成")
