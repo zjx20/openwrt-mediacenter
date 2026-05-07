@@ -371,6 +371,11 @@
   <h2>TTS 投递</h2>
   <div class="tts-form">
     <textarea id="tts-text" placeholder="输入要播报的文本，例如：晚饭时间到了，请到客厅集合。"></textarea>
+    <div class="vol-row">
+      <label>TTS 音量</label>
+      <input id="tts-volume" type="range" min="0" max="130" value="70" oninput="onTtsVolumeInput()" onchange="onTtsVolumeChange()">
+      <span id="tts-vol-val" class="vol-val">70</span>
+    </div>
     <div class="tts-toolbar">
       <div class="tts-targets">
         <span class="tts-label">播放目标</span>
@@ -409,6 +414,7 @@
 const $ = (id) => document.getElementById(id);
 let currentMode = "repeat_all";
 let lastVolume = 50;
+let ttsVolume = 70;
 let pollTimer = null;
 let ttsTarget = "device";
 let ttsSendBusy = false;
@@ -443,10 +449,24 @@ async function refresh() {
       api("/api/music/tracks"),
     ]);
     renderNowPlaying(status);
+    syncTtsVolumeSlider(status);
     renderPlaylist(tracksData);
     renderSysStatus(status);
   } catch (e) {
     console.error(e);
+  }
+}
+
+function syncTtsVolumeSlider(status) {
+  const ttsChannel = (status.audio_channels || {}).TTS;
+  if (ttsChannel && ttsChannel.volume != null) {
+    const slider = $("tts-volume");
+    const valEl = $("tts-vol-val");
+    if (slider && parseInt(slider.value, 10) !== ttsChannel.volume) {
+      slider.value = ttsChannel.volume;
+      if (valEl) valEl.textContent = ttsChannel.volume;
+      ttsVolume = ttsChannel.volume;
+    }
   }
 }
 
@@ -860,6 +880,24 @@ function onVolumeChange() {
       });
       lastVolume = v;
     } catch (e) { toast("音量设置失败: " + e.message, true); }
+  }, 150);
+}
+
+let ttsVolumeDebounce = null;
+function onTtsVolumeInput() {
+  $("tts-vol-val").textContent = $("tts-volume").value;
+}
+function onTtsVolumeChange() {
+  clearTimeout(ttsVolumeDebounce);
+  ttsVolumeDebounce = setTimeout(async () => {
+    const v = parseInt($("tts-volume").value, 10);
+    try {
+      await api("/api/volume", {
+        method: "POST",
+        body: JSON.stringify({ volume: v, channel: "tts" }),
+      });
+      ttsVolume = v;
+    } catch (e) { toast("TTS 音量设置失败: " + e.message, true); }
   }, 150);
 }
 

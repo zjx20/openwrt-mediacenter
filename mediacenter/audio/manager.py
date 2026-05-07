@@ -133,6 +133,7 @@ class AudioManager:
             p.name: {
                 "state": self.channels[p].player.state.name,
                 "url": self.channels[p].player.current_url,
+                "volume": self.channels[p].player.volume,
                 "was_playing": self.channels[p].was_playing,
                 "available": self.channels[p].available,
                 "last_error": self.channels[p].last_error,

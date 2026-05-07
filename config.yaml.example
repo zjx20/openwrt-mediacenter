@@ -12,7 +12,7 @@ audio:
   # PulseAudio sink 名称，留空则使用系统默认 sink（通常就是蓝牙音箱）
   # 使用 `pactl list short sinks` 查看可用 sink
   pulse_sink: ""
-  # 背景音乐 / TTS 的默认音量 (0-100)
+  # 背景音乐的默认音量 (0-100)
   default_volume: 50
 
 # 背景音乐配置
@@ -54,13 +54,24 @@ dlna:
 tts:
   # 引擎: edge-tts / openai / piper
   engine: "edge-tts"
-  # edge-tts 语音
+  # edge-tts 语音（engine 为 edge-tts 时生效）
+  # 可选中文音色:
+  #   zh-CN-XiaoxiaoNeural  晓晓 女（默认）
+  #   zh-CN-YunxiNeural     云希 男
+  #   zh-CN-YunyangNeural   云扬 男（播音腔）
   voice: "zh-CN-XiaoxiaoNeural"
-  # 语速调整 (-50% ~ +50%)
+  # 语速调整，范围 -50% ~ +50%（edge-tts 时生效）
   rate: "+0%"
-  # TTS 临时文件目录
+  # 音调调整，单位 Hz，如 +10Hz / -5Hz（edge-tts 时生效）
+  pitch: "+0Hz"
+  # TTS 播报音量 (0-130)，超过 100 时 mpv 会做软件增益
+  # edge-tts 生成的音频电平通常低于商业音乐，建议设为 70-100
+  volume: 70
+  # TTS 缓存目录
   cache_dir: "/tmp/tts_cache"
-  # OpenAI 配置 (当 engine 为 openai 时)
+  # 缓存上限 (MB)，超出后按最久未访问顺序淘汰；0 表示不限制
+  cache_max_mb: 50
+  # OpenAI 兼容 TTS 配置（engine 为 openai 时生效）
   openai:
     api_key: ""
     base_url: "https://api.openai.com/v1"
@@ -70,12 +81,14 @@ tts:
 # 定时任务
 scheduler:
   jobs:
-    # 下载新闻联播
-    - id: "download_news"
-      enabled: disable
-      # cron 表达式: 每天 19:30 下载
-      cron: "30 19 * * *"
-      type: "download_news"
+    # 示例：每天 08:00 播报早安问候
+    # - id: "morning_greeting"
+    #   name: "早安问候"
+    #   enabled: false
+    #   cron: "0 8 * * *"
+    #   runtime: "python"
+    #   script: |
+    #     await tts.speak("早上好，今天也要元气满满！")
 
 # AI 配置
 ai:

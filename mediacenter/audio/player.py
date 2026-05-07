@@ -433,6 +433,10 @@ class MpvPlayer:
         logger.info(f"[{self.name}] mpv 已关闭")
 
     @property
+    def volume(self) -> int:
+        return self._volume
+
+    @property
     def is_playing(self) -> bool:
         return self.state == PlayerState.PLAYING
 

@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
         "voice": "zh-CN-XiaoxiaoNeural",
         "rate": "+0%",
         "pitch": "+0Hz",
+        "volume": 70,
         "cache_dir": "/tmp/tts_cache",
         "cache_max_mb": 50,
         "openai": {

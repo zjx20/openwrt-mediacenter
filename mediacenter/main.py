@@ -40,8 +40,9 @@ class MediaCenter:
         # 1. 音频管理器
         self.audio_manager = AudioManager(backend=backend, pulse_sink=pulse_sink)
         default_vol = config.get("audio", "default_volume", default=50)
-        for p in (AudioPriority.BACKGROUND, AudioPriority.TTS):
-            await self.audio_manager.set_volume(p, default_vol)
+        await self.audio_manager.set_volume(AudioPriority.BACKGROUND, default_vol)
+        tts_vol = config.get("tts", "volume", default=70)
+        await self.audio_manager.set_volume(AudioPriority.TTS, tts_vol)
         logger.info(f"音频管理器已启动 (backend={backend})")
 
         # 2. 背景音乐播放器

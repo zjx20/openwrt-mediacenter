@@ -42,6 +42,7 @@ class PlaylistRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
+    volume: Optional[int] = None
 
 
 class VolumeRequest(BaseModel):
@@ -211,7 +212,10 @@ async def search_music(req: SearchRequest):
 @app.post("/api/tts/speak")
 async def tts_speak(req: TTSRequest):
     """TTS 语音播报"""
+    from mediacenter.audio.manager import AudioPriority
     mc = _get_mc()
+    if req.volume is not None:
+        await mc.audio_manager.set_volume(AudioPriority.TTS, req.volume)
     await mc.tts.speak(req.text)
     return {"status": "done", "text": req.text}
 
