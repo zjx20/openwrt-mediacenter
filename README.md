@@ -449,23 +449,27 @@ AirPlay 让你可以从 iPhone、iPad 或 Mac 无线推送音频到 OpenWrt 设�
 
 ### 非 Docker 部署 (手动安装)
 
-如果直接在 OpenWrt 上运行（不用 Docker），需要手动安装：
+如果直接在 OpenWrt 上运行（不用 Docker），只需要装好 shairport-sync 和 avahi，
+并让 avahi 常驻；`shairport-sync` 进程本身和 Docker 方式一样由 `mediacenter` 应用托管启动，
+设备名取 `config.yaml` 里的 `airplay.name`（环境变量 `AIRPLAY_NAME` 优先级更高）：
 
 ```bash
 # 1. 安装 shairport-sync 和 avahi
 opkg update
 opkg install shairport-sync avahi-daemon
 
-# 2. 运行配置脚本
-sh scripts/setup_airplay.sh "我的音箱"
-#                            └── AirPlay 显示的名称
-
-# 或者手动配置 (见下方)
+# 2. 让 avahi (mDNS 设备发现) 开机常驻
+/etc/init.d/avahi-daemon enable
+/etc/init.d/avahi-daemon start
 ```
+
+> **不要**把 shairport-sync 注册成 init.d 服务（`/etc/init.d/shairport-sync enable`）。
+> 应用启动时会自己拉起一个 shairport-sync 进程，系统服务再起一个会互相抢占
+> AirPlay 端口和设备名。如果之前启用过，先 `disable` 再 `stop`。
 
 ### 手动配置 shairport-sync
 
-非 Docker 直装时，编辑 `/etc/shairport-sync.conf`；如果是 Docker 并想自定义配置，请挂载到 `/etc/mediacenter/shairport-sync.conf`：
+默认不需要任何配置文件：应用会根据 `config.yaml` 的音频后端自动生成一份运行时配置（含 PulseAudio `media_role = "airplay"`，TTS ducking 依赖它）。只有需要覆盖默认参数时才提供自己的配置：Docker 挂载到 `/etc/mediacenter/shairport-sync.conf`，直装则把文件路径填到 `config.yaml` 的 `airplay.config_path`。自定义配置示例：
 
 ```
 general = {
@@ -473,11 +477,16 @@ general = {
     output_backend = "pa";      // 使用 PulseAudio 输出（自动路由到蓝牙音箱）
 };
 
-// 不需要指定具体设备，PulseAudio 自动路由到默认 sink
+// 使用自定义配置后应用不再自动注入 media_role，务必保留这一段，
+// 否则 TTS 播报时 AirPlay 不会被 PulseAudio 自动压低音量
+pa = {
+    media_role = "airplay";
+    // sink = "";               // 留空 = 使用系统默认 sink（蓝牙音箱等）
+};
 
 metadata = {
-    enabled = "yes";                              // 启用元数据
-    pipe_name = "/tmp/shairport-sync-metadata";   // 元数据管道
+    enabled = "yes";
+    pipe_name = "/tmp/shairport-sync-metadata";
 };
 ```
 
@@ -496,20 +505,6 @@ pactl info | grep "Default Sink"
 
 # 手动切换默认输出到蓝牙音箱
 pactl set-default-sink bluez_sink.XX_XX_XX_XX_XX_XX
-```
-
-### 启动 AirPlay
-
-### 启动 AirPlay (非 Docker)
-
-```bash
-# 启用 avahi (设备发现服务)
-/etc/init.d/avahi-daemon enable
-/etc/init.d/avahi-daemon start
-
-# 启用 shairport-sync
-/etc/init.d/shairport-sync enable
-/etc/init.d/shairport-sync start
 ```
 
 ### 在 iPhone/iPad 上使用
@@ -550,8 +545,8 @@ ps | grep shairport
 # 检查 avahi 是否运行
 ps | grep avahi
 
-# 查看 shairport-sync 日志
-logread | grep shairport
+# 查看 AirPlay 相关日志（shairport-sync 的输出由 mediacenter 捕获并写入应用日志）
+logread | grep -i airplay
 
 # ---- 通用 ----
 # 检查端口是否监听
@@ -576,7 +571,8 @@ speaker-test -t wav -c 2
 
 **Q: AirPlay 播放时背景音乐没有暂停？**
 - 确认 mediacenter 已启动且 airplay 配置已启用
-- 检查 `/tmp/shairport-sync-metadata` 管道是否存在
+- 播放状态来自 shairport-sync 的 MPRIS D-Bus 信号：确认 dbus 正常运行，
+  并在日志里找 `AirPlay` 状态变化记录；`curl /api/airplay/status` 的 `is_playing` 应随播放切换
 
 ---
 
@@ -629,7 +625,6 @@ openwrt-mediacenter/
 │       └── routes.py         # REST API (FastAPI)
 └── scripts/
     ├── install_openwrt.sh    # 安装脚本
-    ├── setup_airplay.sh      # AirPlay 配置脚本
     ├── docker_run.sh         # Docker 构建/运行脚本
     └── init.d_mediacenter    # 系统服务脚本
 ```
