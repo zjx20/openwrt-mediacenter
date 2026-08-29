@@ -13,6 +13,8 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Callable
 
+from .pulse import env_with_media_role
+
 logger = logging.getLogger(__name__)
 
 
@@ -177,14 +179,8 @@ class MpvPlayer:
             if self.pulse_sink:
                 cmd.append(f"--pulse-sink={self.pulse_sink}")
             if self.pulse_media_role:
-                pulse_prop_parts = [
-                    item
-                    for item in env.get("PULSE_PROP", "").split()
-                    if not item.startswith("media.role=")
-                ]
-                pulse_prop_parts.append(f"media.role={self.pulse_media_role}")
-                self._last_pulse_prop = " ".join(pulse_prop_parts)
-                env["PULSE_PROP"] = self._last_pulse_prop
+                env = env_with_media_role(env, self.pulse_media_role)
+                self._last_pulse_prop = env["PULSE_PROP"]
         elif self.backend == "alsa":
             cmd.append("--ao=alsa")
 

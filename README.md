@@ -552,7 +552,9 @@ opkg install shairport-sync-openssl avahi-dbus-daemon
 
 ### 手动配置 shairport-sync
 
-默认不需要任何配置文件：应用会根据 `config.yaml` 的音频后端自动生成一份运行时配置（含 PulseAudio `media_role = "airplay"`，TTS ducking 依赖它）。只有需要覆盖默认参数时才提供自己的配置：Docker 挂载到 `/etc/mediacenter/shairport-sync.conf`，直装则把文件路径填到 `config.yaml` 的 `airplay.config_path`。自定义配置示例：
+默认不需要任何配置文件：应用会根据 `config.yaml` 的音频后端自动生成一份运行时配置。只有需要覆盖默认参数时才提供自己的配置：Docker 挂载到 `/etc/mediacenter/shairport-sync.conf`，直装则把文件路径填到 `config.yaml` 的 `airplay.config_path`。
+
+TTS ducking 需要的 PulseAudio `media.role=airplay` **不在配置文件里**：shairport-sync 的 pa 后端不支持在配置里设 role（`pa = { media_role = ... }` 会被静默忽略），应用是通过给 shairport-sync 进程设置 libpulse 的 `PULSE_PROP` 环境变量注入的（[`mediacenter/audio/pulse.py`](mediacenter/audio/pulse.py)），自定义配置文件不影响这一点。自定义配置示例：
 
 ```
 general = {
@@ -560,10 +562,7 @@ general = {
     output_backend = "pa";      // 使用 PulseAudio 输出（自动路由到蓝牙音箱）
 };
 
-// 使用自定义配置后应用不再自动注入 media_role，务必保留这一段，
-// 否则 TTS 播报时 AirPlay 不会被 PulseAudio 自动压低音量
 pa = {
-    media_role = "airplay";
     // sink = "";               // 留空 = 使用系统默认 sink（蓝牙音箱等）
 };
 

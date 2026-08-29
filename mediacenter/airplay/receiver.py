@@ -13,9 +13,17 @@ import signal
 import tempfile
 from collections import deque
 
+from ..audio.pulse import env_with_media_role
+
 logger = logging.getLogger(__name__)
 
 SHAIRPORT_SYNC_BIN = "shairport-sync"
+# shairport-sync 在 PulseAudio 里的 media.role，必须与 module-role-ducking 的
+# ducking_roles（scripts/entrypoint.sh / README）一致，否则 TTS 播报时 AirPlay 不会被压低。
+# shairport-sync 的 pa 后端不支持在配置文件里设 role（audio_pa.c 只读
+# pa.server / pa.application_name / pa.sink，建流不带 proplist），所以只能通过
+# libpulse 的 PULSE_PROP 环境变量注入，见 audio/pulse.py。
+AIRPLAY_MEDIA_ROLE = "airplay"
 MPRIS_BUS_NAME = "org.mpris.MediaPlayer2.ShairportSync"
 MPRIS_OBJECT = "/org/mpris/MediaPlayer2"
 MPRIS_PLAYER_IFACE = "org.mpris.MediaPlayer2.Player"
@@ -48,6 +56,7 @@ class AirPlayReceiver:
         self._recent_output: deque[str] = deque(maxlen=20)
         self._volume_apply_task: asyncio.Task | None = None
         self._restart_lock = asyncio.Lock()
+        self._last_pulse_prop: str | None = None
 
     def _resolve_name(self) -> str:
         return os.environ.get(
@@ -109,7 +118,6 @@ class AirPlayReceiver:
                 "",
                 "pa = {",
                 '    application_name = "shairport-sync";',
-                '    media_role = "airplay";',
             ])
             if pulse_sink:
                 escaped_sink = pulse_sink.replace('"', '\\"')
@@ -250,8 +258,13 @@ class AirPlayReceiver:
         self._last_error = None
         self._last_exit_code = None
         self._active_config_path = config_path
+        # 无论 config.yaml 选的是哪种后端都注入：自定义配置文件可能自行选用 pa 后端，
+        # 而 PULSE_PROP 对不走 libpulse 的进程（alsa）没有任何影响。
+        env = env_with_media_role(os.environ, AIRPLAY_MEDIA_ROLE)
+        self._last_pulse_prop = env["PULSE_PROP"]
         self._process = await asyncio.create_subprocess_exec(
             *cmd,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -336,7 +349,8 @@ class AirPlayReceiver:
             await self._spawn_process(cmd, config_path)
             logger.info(
                 f"shairport-sync 启动中: {name} (port {port}), "
-                f"PID={self._process.pid}, config={config_path or 'builtin'}"
+                f"PID={self._process.pid}, config={config_path or 'builtin'}, "
+                f"pulse_prop={self._last_pulse_prop}"
             )
 
             if await self._wait_for_stable_startup(config_path):
@@ -569,6 +583,7 @@ class AirPlayReceiver:
             "status_text": self._status_text(),
             "name": self._resolve_name(),
             "config_path": self._active_config_path,
+            "pulse_prop": self._last_pulse_prop,
             "last_exit_code": self._last_exit_code,
             "last_error": self._last_error,
         }
