@@ -9,7 +9,7 @@
 | 🎵 背景音乐 | 支持 YouTube、B站、网易云、直接 URL 等 | ✅ |
 | 📱 AirPlay | iPhone/iPad/Mac 无线推送音频 | ✅ |
 | 📺 DLNA | Android/PC DLNA 推送音频 | ✅ |
-| 🔊 TTS | 文字转语音播报 (edge-tts/OpenAI) | ✅ |
+| 🔊 TTS | 文字转语音播报 (edge-tts) | ✅ |
 | 🔀 打断规则 | AirPlay / DLNA 互相硬重启互斥；mpv 被动让位 | ✅ |
 
 ### 音频流打断规则
@@ -624,7 +624,7 @@ openwrt-mediacenter/
 │   ├── dlna/
 │   │   └── renderer.py       # DLNA 渲染 (gmrender-resurrect)
 │   ├── tts/
-│   │   └── engine.py         # TTS 引擎 (edge-tts/OpenAI/Piper)
+│   │   └── engine.py         # TTS 引擎 (edge-tts)
 │   └── api/
 │       └── routes.py         # REST API (FastAPI)
 └── scripts/

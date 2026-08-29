@@ -27,19 +27,12 @@ DEFAULT_CONFIG = {
         "port": 49152,
     },
     "tts": {
-        "engine": "edge-tts",
         "voice": "zh-HK-HiuMaanNeural",
         "rate": "+0%",
         "pitch": "+0Hz",
         "volume": 70,
         "cache_dir": "/tmp/tts_cache",
         "cache_max_mb": 50,
-        "openai": {
-            "api_key": "",
-            "base_url": "https://api.openai.com/v1",
-            "model": "tts-1",
-            "voice": "alloy",
-        },
     },
 }
 

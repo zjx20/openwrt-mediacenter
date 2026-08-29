@@ -50,12 +50,9 @@ dlna:
   # 端口
   port: 49152
 
-# TTS 配置
+# TTS 配置（基于 edge-tts，微软免费 TTS，无需 API Key）
 tts:
-  # 引擎: edge-tts / openai / piper
-  engine: "edge-tts"
-  # edge-tts 语音（engine 为 edge-tts 时生效）
-  # 可选中文音色:
+  # 语音音色，可选中文音色:
   #   zh-HK-HiuMaanNeural   曉曼 粤语 女（默认）
   #   zh-HK-HiuGaaiNeural   曉佳 粤语 女
   #   zh-HK-WanLungNeural   雲龍 粤语 男
@@ -63,9 +60,9 @@ tts:
   #   zh-CN-YunxiNeural     云希 普通话 男
   #   zh-CN-YunyangNeural   云扬 普通话 男（播音腔）
   voice: "zh-HK-HiuMaanNeural"
-  # 语速调整，范围 -50% ~ +50%（edge-tts 时生效）
+  # 语速调整，范围 -50% ~ +50%
   rate: "+0%"
-  # 音调调整，单位 Hz，如 +10Hz / -5Hz（edge-tts 时生效）
+  # 音调调整，单位 Hz，如 +10Hz / -5Hz
   pitch: "+0Hz"
   # TTS 播报音量 (0-130)，超过 100 时 mpv 会做软件增益
   # edge-tts 生成的音频电平通常低于商业音乐，建议设为 70-100
@@ -74,9 +71,3 @@ tts:
   cache_dir: "/tmp/tts_cache"
   # 缓存上限 (MB)，超出后按最久未访问顺序淘汰；0 表示不限制
   cache_max_mb: 50
-  # OpenAI 兼容 TTS 配置（engine 为 openai 时生效）
-  openai:
-    api_key: ""
-    base_url: "https://api.openai.com/v1"
-    model: "tts-1"
-    voice: "alloy"

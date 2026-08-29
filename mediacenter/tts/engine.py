@@ -1,23 +1,17 @@
-"""TTS 引擎 - 支持 edge-tts 和 OpenAI TTS"""
+"""TTS 引擎 - 基于 edge-tts"""
 
 import asyncio
 import hashlib
 import logging
-import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 class TTSEngine:
-    """文字转语音引擎
+    """文字转语音引擎（edge-tts，微软免费 TTS，无需 API Key）
 
-    支持多种后端:
-    - edge-tts: 微软免费 TTS (推荐，无需 API Key)
-    - openai: OpenAI TTS API
-    - piper: 本地 Piper TTS (适合离线使用)
-
-    支持的中文音色（engine=edge-tts）：
+    支持的中文音色：
       zh-HK-HiuMaanNeural           曉曼 粤语 女（默认）
       zh-HK-HiuGaaiNeural           曉佳 粤语 女
       zh-HK-WanLungNeural           雲龍 粤语 男
@@ -41,9 +35,9 @@ class TTSEngine:
     def _cache_path(self, text: str) -> Path:
         """生成缓存文件路径"""
         h = hashlib.md5(text.encode()).hexdigest()
-        engine = self.config.get("engine", "edge-tts")
         voice = self.config.get("voice", "default")
-        return self.cache_dir / f"{engine}_{voice}_{h}.mp3"
+        # 文件名保留 "edge-tts_" 前缀，与旧版多引擎时期生成的缓存兼容
+        return self.cache_dir / f"edge-tts_{voice}_{h}.mp3"
 
     def _evict_cache(self):
         """LRU 淘汰：按 atime 升序删除最久未访问文件，直到总大小低于 cache_max_mb"""
@@ -66,17 +60,7 @@ class TTSEngine:
             logger.debug(f"TTS 缓存命中: {cache}")
             return str(cache)
 
-        engine = self.config.get("engine", "edge-tts")
-
-        if engine == "edge-tts":
-            path = await self._edge_tts(text, cache)
-        elif engine == "openai":
-            path = await self._openai_tts(text, cache)
-        elif engine == "piper":
-            path = await self._piper_tts(text, cache)
-        else:
-            raise ValueError(f"不支持的 TTS 引擎: {engine}")
-
+        path = await self._edge_tts(text, cache)
         self._evict_cache()
         return path
 
@@ -86,15 +70,6 @@ class TTSEngine:
         if cache.exists():
             cache.touch()  # 更新 atime 供 LRU 使用
             with open(cache, "rb") as f:
-                while data := f.read(8192):
-                    yield data
-            return
-
-        engine = self.config.get("engine", "edge-tts")
-        if engine != "edge-tts":
-            # 非 edge-tts 不支持流式，降级到 synthesize
-            path = await self.synthesize(text)
-            with open(path, "rb") as f:
                 while data := f.read(8192):
                     yield data
             return
@@ -173,46 +148,6 @@ class TTSEngine:
             if proc.returncode != 0:
                 raise RuntimeError(f"edge-tts 失败: {stderr.decode()}")
             return str(output)
-
-    async def _openai_tts(self, text: str, output: Path) -> str:
-        """使用 OpenAI TTS API"""
-        import httpx
-
-        openai_config = self.config.get("openai", {})
-        api_key = openai_config.get("api_key", "")
-        base_url = openai_config.get("base_url", "https://api.openai.com/v1")
-        model = openai_config.get("model", "tts-1")
-        voice = openai_config.get("voice", "alloy")
-
-        if not api_key:
-            raise ValueError("OpenAI TTS 需要配置 api_key")
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{base_url}/audio/speech",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={"model": model, "voice": voice, "input": text},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            output.write_bytes(resp.content)
-
-        logger.info(f"OpenAI TTS 合成完成: {output}")
-        return str(output)
-
-    async def _piper_tts(self, text: str, output: Path) -> str:
-        """使用 Piper 本地 TTS"""
-        proc = await asyncio.create_subprocess_exec(
-            "piper",
-            "--output_file", str(output),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate(input=text.encode())
-        if proc.returncode != 0:
-            raise RuntimeError(f"Piper TTS 失败: {stderr.decode()}")
-        return str(output)
 
     def clear_cache(self):
         """清除 TTS 缓存"""
