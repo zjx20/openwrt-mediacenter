@@ -62,13 +62,24 @@ pactl load-module module-role-ducking \
 
 ### 1. 安装依赖 (OpenWrt)
 
+> **先看这里：原版 OpenWrt 官方软件源撑不起完整的直装方式，推荐使用下文的 Docker 部署。**
+> 以 23.05 官方源为准，直装有两个硬伤：
+> - 源里**没有 `mpv`**，背景音乐和 TTS 通道无法工作，需要自行编译或从第三方源获取；
+> - 官方 `shairport-sync-*` 编译时**不带 PulseAudio 后端**（`--with-pa`），也没有 MPRIS D-Bus 接口。
+>   应用在 `audio.backend: pulse` 下会以 `-o pa` 启动 shairport-sync，用官方包会直接失败。
+>   直装要自行编译 shairport-sync，至少 `--with-pa --with-metadata`，建议再加
+>   `--with-dbus-interface --with-mpris-interface`（否则播放状态只能靠 stderr 标记，客户端异常断开时最多卡到 `session_timeout`）。
+>
+> 下面的安装脚本和手动命令只覆盖官方源里有的部分，`mpv` 和带 pa 后端的 shairport-sync 需要你自己补齐。
+
 ```bash
-# 一键安装
+# 一键安装（官方源部分）
 sh scripts/install_openwrt.sh
 
 # 或手动安装
 opkg update
-opkg install python3 python3-pip mpv alsa-utils shairport-sync gmrender-resurrect
+opkg install python3 python3-pip alsa-utils pulseaudio-daemon pulseaudio-tools \
+             avahi-dbus-daemon shairport-sync-openssl mpd-full upmpdcli
 pip3 install -r requirements.txt
 ```
 
@@ -123,7 +134,7 @@ python3 -m mediacenter -c config.yaml -p 9090
 
 ### 4. Docker 部署 (推荐)
 
-镜像内置了 shairport-sync (AirPlay)、gmediarender (DLNA)、avahi-daemon (mDNS) 等所有组件，无需在宿主机额外安装。
+镜像内置了 shairport-sync (AirPlay)、mpd + upmpdcli (DLNA)、avahi-daemon (mDNS) 等所有组件，无需在宿主机额外安装。
 
 ```bash
 # 构建镜像
@@ -262,6 +273,10 @@ docker run -d \
   --name mediacenter \
   openwrt-mediacenter
 ```
+
+> ALSA 模式只覆盖背景音乐、TTS 和 AirPlay。**DLNA 在 ALSA 模式下不可用**——mpd 的输出固定走
+> PulseAudio（需要 `media_role=dlna` 参与 TTS ducking）；同样地，没有 PulseAudio 也就没有
+> TTS 播报时自动压低其他音频的效果。
 
 #### 确认音频设备工作
 
@@ -455,10 +470,12 @@ AirPlay 让你可以从 iPhone、iPad 或 Mac 无线推送音频到 OpenWrt 设�
 
 ```bash
 # 1. 安装 shairport-sync 和 avahi
+#    注意：官方 shairport-sync-openssl 不带 PulseAudio 后端，见上文「安装依赖」的说明，
+#    audio.backend 为 pulse 时需要换成自行编译的版本
 opkg update
-opkg install shairport-sync avahi-daemon
+opkg install shairport-sync-openssl avahi-dbus-daemon
 
-# 2. 让 avahi (mDNS 设备发现) 开机常驻
+# 2. 让 avahi (mDNS 设备发现) 开机常驻（init.d 脚本名就叫 avahi-daemon）
 /etc/init.d/avahi-daemon enable
 /etc/init.d/avahi-daemon start
 ```
@@ -580,18 +597,27 @@ speaker-test -t wav -c 2
 
 DLNA 允许 Android 手机、Windows PC 等设备推送音频。
 
-Docker 部署时 gmediarender 已内置在镜像中，无需额外安装。
+实现方式是 **upmpdcli + mpd** 一对进程：upmpdcli 负责 UPnP MediaRenderer / OpenHome
+协议层，把控制端的指令翻译成 MPD 命令；mpd 负责拉流、解码并通过 PulseAudio 输出
+（带 `media_role=dlna`，供 TTS ducking 使用）。两者的配置文件由 `mediacenter` 在启动时
+自动生成，进程也由应用托管（[`mediacenter/dlna/renderer.py`](mediacenter/dlna/renderer.py)），
+`config.yaml` 里只需关心 `dlna.name`、`dlna.port`、`dlna.default_volume`。
 
-非 Docker 部署：
+Docker 部署时 mpd 和 upmpdcli 已内置在镜像中，无需额外安装。
+
+非 Docker 部署只需装包，不要注册它们的系统服务：
 
 ```bash
-# 安装
-opkg install gmrender-resurrect
+# mpd 需要 pulse 输出插件和 curl 输入插件，mpd-mini 缺这些，必须用 mpd-full
+opkg install mpd-full upmpdcli
 
-# 启动
-/etc/init.d/gmrender enable
-/etc/init.d/gmrender start
+# OpenWrt 装包时会自动 enable 这两个包自带的 init.d 服务，必须关掉，
+# 否则会和 mediacenter 自己拉起的实例抢 6600 / UPnP 端口
+/etc/init.d/mpd disable;      /etc/init.d/mpd stop
+/etc/init.d/upmpdcli disable; /etc/init.d/upmpdcli stop
 ```
+
+DLNA 依赖宿主机 PulseAudio（见上文「容器中使用音频设备」），`audio.backend: alsa` 时不可用。
 
 在 Android 上使用 BubbleUPnP、HiFi Cast 等 DLNA 客户端连接。
 
@@ -618,7 +644,8 @@ openwrt-mediacenter/
 │   ├── airplay/
 │   │   └── receiver.py       # AirPlay 接收 (shairport-sync)
 │   ├── dlna/
-│   │   └── renderer.py       # DLNA 渲染 (gmrender-resurrect)
+│   │   ├── renderer.py       # DLNA 渲染 (mpd + upmpdcli 进程托管)
+│   │   └── proxy.py          # mpd 拉流用的 HTTP 转发代理（上游断连自动 Range 续传）
 │   ├── tts/
 │   │   └── engine.py         # TTS 引擎 (edge-tts)
 │   └── api/
@@ -634,9 +661,10 @@ openwrt-mediacenter/
 - OpenWrt 21.02+ (或任意 Linux)
 - Python 3.10+
 - mpv 媒体播放器
-- USB 声卡或板载音频
-- (可选) shairport-sync (AirPlay)
-- (可选) gmrender-resurrect (DLNA)
+- PulseAudio（所有音频通道默认经它输出；DLNA 和 TTS ducking 硬依赖）
+- USB 声卡 / 板载音频 / 蓝牙音箱（由 PulseAudio 路由）
+- (可选) shairport-sync（需带 PulseAudio 后端）+ avahi-daemon (AirPlay)
+- (可选) mpd-full + upmpdcli (DLNA)
 - (可选) yt-dlp (YouTube 等平台支持)
 
 ## 许可证
