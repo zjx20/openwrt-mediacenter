@@ -28,7 +28,7 @@ DEFAULT_CONFIG = {
     },
     "tts": {
         "engine": "edge-tts",
-        "voice": "zh-CN-XiaoxiaoNeural",
+        "voice": "zh-HK-HiuMaanNeural",
         "rate": "+0%",
         "pitch": "+0Hz",
         "volume": 70,

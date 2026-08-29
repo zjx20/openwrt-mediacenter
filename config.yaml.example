@@ -56,10 +56,13 @@ tts:
   engine: "edge-tts"
   # edge-tts 语音（engine 为 edge-tts 时生效）
   # 可选中文音色:
-  #   zh-CN-XiaoxiaoNeural  晓晓 女（默认）
-  #   zh-CN-YunxiNeural     云希 男
-  #   zh-CN-YunyangNeural   云扬 男（播音腔）
-  voice: "zh-CN-XiaoxiaoNeural"
+  #   zh-HK-HiuMaanNeural   曉曼 粤语 女（默认）
+  #   zh-HK-HiuGaaiNeural   曉佳 粤语 女
+  #   zh-HK-WanLungNeural   雲龍 粤语 男
+  #   zh-CN-XiaoxiaoNeural  晓晓 普通话 女
+  #   zh-CN-YunxiNeural     云希 普通话 男
+  #   zh-CN-YunyangNeural   云扬 普通话 男（播音腔）
+  voice: "zh-HK-HiuMaanNeural"
   # 语速调整，范围 -50% ~ +50%（edge-tts 时生效）
   rate: "+0%"
   # 音调调整，单位 Hz，如 +10Hz / -5Hz（edge-tts 时生效）

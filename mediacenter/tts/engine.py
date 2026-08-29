@@ -18,7 +18,10 @@ class TTSEngine:
     - piper: 本地 Piper TTS (适合离线使用)
 
     支持的中文音色（engine=edge-tts）：
-      zh-CN-XiaoxiaoNeural          晓晓 中文 女（默认）
+      zh-HK-HiuMaanNeural           曉曼 粤语 女（默认）
+      zh-HK-HiuGaaiNeural           曉佳 粤语 女
+      zh-HK-WanLungNeural           雲龍 粤语 男
+      zh-CN-XiaoxiaoNeural          晓晓 中文 女
       zh-CN-XiaoyiNeural            晓依 中文 女
       zh-CN-YunjianNeural           云健 中文 男
       zh-CN-YunxiNeural             云希 中文 男
@@ -98,7 +101,7 @@ class TTSEngine:
 
         import edge_tts
 
-        voice = self.config.get("voice", "zh-CN-XiaoxiaoNeural")
+        voice = self.config.get("voice", "zh-HK-HiuMaanNeural")
         rate  = self.config.get("rate",  "+0%")
         pitch = self.config.get("pitch", "+0Hz")
         tmp   = cache.with_suffix(".tmp")
@@ -140,7 +143,7 @@ class TTSEngine:
 
     async def _edge_tts(self, text: str, output: Path) -> str:
         """使用 edge-tts 合成"""
-        voice = self.config.get("voice", "zh-CN-XiaoxiaoNeural")
+        voice = self.config.get("voice", "zh-HK-HiuMaanNeural")
         rate  = self.config.get("rate",  "+0%")
         pitch = self.config.get("pitch", "+0Hz")
 
