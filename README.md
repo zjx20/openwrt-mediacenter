@@ -157,7 +157,69 @@ sh scripts/docker_run.sh logs
 sh scripts/docker_run.sh stop
 ```
 
-[`scripts/docker_run.sh`](scripts/docker_run.sh) 会把当前目录的 `config.yaml`（不存在时自动从 `config.yaml.example` 复制）以只读方式挂载到容器内 `/etc/mediacenter/config.yaml`；可通过环境变量 `CONFIG_PATH` 指定其他配置文件路径。
+[`scripts/docker_run.sh`](scripts/docker_run.sh) 会把当前目录的 `config.yaml`（不存在时自动从 `config.yaml.example` 复制）以只读方式挂载到容器内 `/etc/mediacenter/config.yaml`；可通过环境变量 `CONFIG_PATH` 指定其他配置文件路径，`IMAGE_NAME` 指定要运行的镜像（默认 `openwrt-mediacenter`）。
+
+#### 构建多架构镜像（跨架构 / 推送到镜像仓库）
+
+`docker_run.sh build` 只会构建**当前机器架构**的镜像。以下两种情况需要用 `docker buildx`：
+
+- 开发机和路由器架构不同：例如在 x86 电脑上给 aarch64 路由器构建，或在 Apple Silicon 上给 x86 软路由构建；
+- 想把镜像推到仓库，让多台不同架构的设备直接 `docker pull`。
+
+**支持的平台**：`linux/amd64` 和 `linux/arm64` 是主要目标，运行时依赖（mpv、shairport-sync、mpd、upmpdcli、ffmpeg）和所有带原生扩展的 Python 包（pydantic-core、aiohttp、PyYAML）在这两个平台上都有 Alpine/musl 预编译包，构建不需要编译器。`linux/arm/v7` 也能构建，但 PyYAML 没有 musl armv7 wheel，会退回纯 Python 实现（可用，只是 QEMU 模拟下安装较慢）。**MIPS 路由器不支持**——基础镜像 `python:3.13-alpine3.23` 没有 mips 变体。
+
+**前置条件**（在开发机上）：
+
+```bash
+# Docker 20.10+ 自带 buildx；跨架构构建还需要 QEMU binfmt 支持
+# （Docker Desktop 已内置，Linux 上的 docker-ce 执行一次下面这条即可）
+docker run --privileged --rm tonistiigi/binfmt --install all
+
+# 创建一个支持多平台的 builder 并设为默认（只需一次）
+docker buildx create --name mediacenter-builder --driver docker-container --use
+docker buildx inspect --bootstrap
+```
+
+**方式一：构建并推送多架构镜像到仓库**（推荐，一次构建、各架构设备各取所需）
+
+```bash
+# 把 <registry>/<user> 换成你的仓库，例如 ghcr.io/yourname 或 docker.io/yourname
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t <registry>/<user>/openwrt-mediacenter:latest \
+  --push .
+
+# 确认 manifest 里包含了所有平台
+docker buildx imagetools inspect <registry>/<user>/openwrt-mediacenter:latest
+```
+
+路由器上直接拉取并运行（`docker pull` 会自动选中匹配本机架构的那一层）：
+
+```bash
+docker pull <registry>/<user>/openwrt-mediacenter:latest
+IMAGE_NAME=<registry>/<user>/openwrt-mediacenter:latest sh scripts/docker_run.sh run
+```
+
+**方式二：不经过仓库，导出单架构镜像文件再拷到路由器**
+
+`--load` / 导出 tar 只支持**单个**平台，所以一次只能出一种架构：
+
+```bash
+# 在开发机上给 aarch64 路由器构建，输出为 tar
+docker buildx build \
+  --platform linux/arm64 \
+  -t openwrt-mediacenter:latest \
+  -o type=docker,dest=openwrt-mediacenter-arm64.tar .
+
+# 拷到路由器并导入
+scp openwrt-mediacenter-arm64.tar root@192.168.1.1:/tmp/
+ssh root@192.168.1.1 'docker load -i /tmp/openwrt-mediacenter-arm64.tar && rm /tmp/openwrt-mediacenter-arm64.tar'
+
+# 路由器上镜像名仍是 openwrt-mediacenter，docker_run.sh 默认就用它
+ssh root@192.168.1.1 'cd /path/to/openwrt-mediacenter && sh scripts/docker_run.sh run'
+```
+
+> 跨架构构建走 QEMU 用户态模拟，`apk add` 和 `pip install` 会比原生慢数倍；只要不触发源码编译（见上面的平台说明）通常在几分钟内完成。如果需要反复构建，可以加 `--cache-to type=local,dest=.buildx-cache --cache-from type=local,src=.buildx-cache` 复用层缓存。
 
 #### 网络模式选择
 

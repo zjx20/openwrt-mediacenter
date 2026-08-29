@@ -6,3 +6,6 @@ __pycache__/
 .env
 *.md
 !README.md
+# buildx 层缓存与导出的镜像 tar 不进 build context
+.buildx-cache/
+*.tar

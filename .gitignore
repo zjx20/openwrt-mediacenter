@@ -1,1 +1,4 @@
 __pycache__/
+# buildx 层缓存与导出的镜像 tar（见 README「构建多架构镜像」）
+.buildx-cache/
+*.tar

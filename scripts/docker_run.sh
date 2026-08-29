@@ -1,10 +1,16 @@
 #!/bin/sh
 # Docker 构建与运行脚本
 # 用法: sh scripts/docker_run.sh [build|run|run-host|stop|logs|setup-macvlan]
+#
+# 可用环境变量覆盖：
+#   IMAGE_NAME   要运行/构建的镜像名（默认 openwrt-mediacenter；
+#                用仓库里的多架构镜像时填完整引用，如 ghcr.io/you/openwrt-mediacenter:latest）
+#   CONFIG_PATH  挂载进容器的 config.yaml 路径（默认 ./config.yaml）
+#   macvlan 网络参数见下方「macvlan 默认参数」段
 
 set -e
 
-IMAGE_NAME="openwrt-mediacenter"
+IMAGE_NAME="${IMAGE_NAME:-openwrt-mediacenter}"
 CONTAINER_NAME="mediacenter"
 DOCKERFILE_PATH="${DOCKERFILE_PATH:-${DOCKERFILE:-Dockerfile}}"
 CONFIG_PATH="${CONFIG_PATH:-$(pwd)/config.yaml}"
