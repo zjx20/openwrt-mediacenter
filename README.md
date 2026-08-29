@@ -136,6 +136,10 @@ python3 -m mediacenter -c config.yaml -p 9090
 
 镜像内置了 shairport-sync (AirPlay)、mpd + upmpdcli (DLNA)、avahi-daemon (mDNS) 等所有组件，无需在宿主机额外安装。
 
+> 基础镜像钉在 `python:3.13-alpine3.23`：Alpine 3.24 起打包的 shairport-sync 5.x 缺少 PulseAudio 后端
+> （APKBUILD 仍传已被 5.0 改名的 `--with-pa` 开关，被 autoconf 静默忽略），而且 5.x 把后端名从 `pa`
+> 改成了 `pulseaudio`。原因、升级条件和构建期断言见 [`Dockerfile`](Dockerfile) 顶部注释。
+
 ```bash
 # 构建镜像
 sh scripts/docker_run.sh build
