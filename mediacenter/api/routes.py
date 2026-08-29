@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -55,22 +55,8 @@ class SearchRequest(BaseModel):
     source: str = "youtube"
 
 
-class ChatRequest(BaseModel):
-    message: str
-
-
 class PlayModeRequest(BaseModel):
     mode: str  # sequential / shuffle / repeat_one / repeat_all
-
-
-class UserJobBody(BaseModel):
-    id: str
-    name: Optional[str] = None
-    cron: str
-    runtime: str  # "shell" | "python"
-    enabled: bool = True
-    timeout: int = 300
-    script: str = ""
 
 
 # ========== 系统状态 ==========
@@ -348,121 +334,6 @@ async def dlna_restart():
         raise HTTPException(503, "DLNA 未初始化")
     await mc.dlna.restart()
     return {"status": "restarted", "service": "dlna"}
-
-
-# ========== 定时任务 ==========
-
-@app.post("/api/scheduler/run/{job_type}")
-async def run_job(job_type: str):
-    """手动触发定时任务（按内置 type，保留兼容）"""
-    mc = _get_mc()
-    try:
-        await mc.scheduler.run_once(job_type)
-        return {"status": "done", "job": job_type}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.get("/api/scheduler/jobs")
-async def list_jobs():
-    """列出所有任务（内置 + 用户）"""
-    mc = _get_mc()
-    return {"jobs": mc.scheduler.list_all_jobs()}
-
-
-@app.get("/api/scheduler/jobs/{job_id}")
-async def get_job(job_id: str):
-    """获取用户任务详情（含脚本内容）"""
-    mc = _get_mc()
-    job = mc.scheduler.get_user_job(job_id)
-    if not job:
-        raise HTTPException(404, f"用户任务不存在: {job_id}")
-    return job
-
-
-@app.post("/api/scheduler/jobs")
-async def create_job(req: UserJobBody):
-    mc = _get_mc()
-    meta = req.model_dump(exclude={"script"})
-    if meta.get("name") is None:
-        meta["name"] = meta["id"]
-    try:
-        await mc.scheduler.add_user_job(meta, req.script)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"status": "created", "id": req.id}
-
-
-@app.put("/api/scheduler/jobs/{job_id}")
-async def update_job(job_id: str, req: UserJobBody):
-    mc = _get_mc()
-    meta = req.model_dump(exclude={"script"})
-    if meta.get("name") is None:
-        meta["name"] = job_id
-    try:
-        await mc.scheduler.update_user_job(job_id, meta, req.script)
-    except KeyError:
-        raise HTTPException(404, f"用户任务不存在: {job_id}")
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"status": "updated", "id": job_id}
-
-
-@app.delete("/api/scheduler/jobs/{job_id}")
-async def delete_job(job_id: str):
-    mc = _get_mc()
-    try:
-        await mc.scheduler.delete_user_job(job_id)
-    except KeyError:
-        raise HTTPException(404, f"用户任务不存在: {job_id}")
-    return {"status": "deleted", "id": job_id}
-
-
-@app.post("/api/scheduler/jobs/{job_id}/run")
-async def run_job_by_id(job_id: str):
-    """手动触发一次任务（内置或用户）"""
-    mc = _get_mc()
-    if mc.scheduler.has_user_job(job_id):
-        await mc.scheduler.run_user_job_once(job_id)
-        return {"status": "done", "id": job_id}
-    # 兜底：当作内置 type 处理
-    for j in mc.scheduler.config.get("jobs", []):
-        if j.get("id") == job_id:
-            try:
-                await mc.scheduler.run_once(j.get("type"))
-                return {"status": "done", "id": job_id}
-            except ValueError as e:
-                raise HTTPException(400, str(e))
-    raise HTTPException(404, f"任务不存在: {job_id}")
-
-
-@app.get("/api/scheduler/jobs/{job_id}/log", response_class=PlainTextResponse)
-async def get_job_log(job_id: str):
-    mc = _get_mc()
-    return mc.scheduler.read_job_log(job_id)
-
-
-@app.get("/api/scheduler/cron-preview")
-async def cron_preview(expr: str, n: int = 3):
-    """预览 cron 表达式接下来的 N 次触发时间"""
-    mc = _get_mc()
-    n = max(1, min(10, n))
-    try:
-        return {"next": mc.scheduler.cron_preview(expr, n)}
-    except Exception as e:
-        raise HTTPException(400, f"cron 表达式无效: {e}")
-
-
-# ========== AI ==========
-
-@app.post("/api/ai/chat")
-async def ai_chat(req: ChatRequest):
-    """AI 对话"""
-    mc = _get_mc()
-    if not mc.ai:
-        raise HTTPException(400, "AI 功能未启用")
-    response = await mc.ai.chat(req.message)
-    return {"response": response}
 
 
 # ========== 静态 UI ==========

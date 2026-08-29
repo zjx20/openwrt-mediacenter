@@ -80,27 +80,3 @@ tts:
     base_url: "https://api.openai.com/v1"
     model: "tts-1"
     voice: "alloy"
-
-# 定时任务
-scheduler:
-  jobs:
-    # 示例：每天 08:00 播报早安问候
-    # - id: "morning_greeting"
-    #   name: "早安问候"
-    #   enabled: false
-    #   cron: "0 8 * * *"
-    #   runtime: "python"
-    #   script: |
-    #     await tts.speak("早上好，今天也要元气满满！")
-
-# AI 配置
-ai:
-  enabled: false
-  # OpenAI 兼容 API
-  api_key: ""
-  base_url: "https://api.openai.com/v1"
-  model: "gpt-4o"
-  # 系统提示词
-  system_prompt: "你是一个智能家居助手，可以控制音乐播放、TTS 播报等。"
-  # 记忆文件路径
-  memory_file: "/etc/mediacenter/memory.json"

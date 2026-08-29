@@ -34,16 +34,6 @@
     gap: 16px;
   }
   .brand { font-weight: 600; font-size: 15px; color: var(--accent); }
-  .nav-tabs { display: flex; gap: 4px; flex: 1; }
-  .nav-tabs a {
-    color: var(--muted);
-    text-decoration: none;
-    padding: 6px 14px;
-    border-radius: 5px;
-    font-size: 14px;
-  }
-  .nav-tabs a:hover { background: #f0f2f5; color: var(--text); }
-  .nav-tabs a.active { background: var(--accent); color: #fff; }
   main { padding: 20px 24px; max-width: 960px; margin: 0 auto; }
   .card {
     background: var(--panel);
@@ -310,10 +300,6 @@
 <body>
 <header>
   <div class="brand">MediaCenter</div>
-  <nav class="nav-tabs">
-    <a href="/ui/" class="active">播放器</a>
-    <a href="/ui/scheduler.html">定时任务</a>
-  </nav>
 </header>
 <main>
 
@@ -577,7 +563,6 @@ function renderSysStatus(status) {
     },
     { label: "Stream 通道", value: ch.STREAM ? ch.STREAM.state : "—" },
     { label: "TTS 通道",   value: ch.TTS   ? ch.TTS.state   : "—" },
-    { label: "AI",         value: status.ai_enabled ? "已启用" : "未启用" },
   ];
 
   grid.innerHTML = "";

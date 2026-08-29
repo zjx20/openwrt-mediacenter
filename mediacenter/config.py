@@ -41,15 +41,6 @@ DEFAULT_CONFIG = {
             "voice": "alloy",
         },
     },
-    "scheduler": {"jobs": []},
-    "ai": {
-        "enabled": False,
-        "api_key": "",
-        "base_url": "https://api.openai.com/v1",
-        "model": "gpt-4o",
-        "system_prompt": "你是一个智能家居助手，可以控制音乐播放、TTS 播报等。",
-        "memory_file": "/etc/mediacenter/memory.json",
-    },
 }
 
 

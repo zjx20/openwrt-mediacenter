@@ -33,8 +33,7 @@ COPY scripts/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # 创建数据目录
-RUN mkdir -p /etc/mediacenter /etc/mediacenter/scripts /etc/mediacenter/job_logs \
-    /tmp/tts_cache /tmp/news \
+RUN mkdir -p /etc/mediacenter /tmp/tts_cache \
     /var/run/dbus /var/run/avahi-daemon
 
 # 默认配置

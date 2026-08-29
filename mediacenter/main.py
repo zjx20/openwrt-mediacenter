@@ -14,7 +14,6 @@ from .audio.background import BackgroundPlayer
 from .airplay.receiver import AirPlayReceiver
 from .dlna.renderer import DLNARenderer
 from .tts.engine import TTSEngine
-from .scheduler.jobs import Scheduler
 from .api.routes import app, init_api
 
 logger = logging.getLogger(__name__)
@@ -29,8 +28,6 @@ class MediaCenter:
         self.airplay: AirPlayReceiver | None = None
         self.dlna: DLNARenderer | None = None
         self.tts: TTSEngine | None = None
-        self.scheduler: Scheduler | None = None
-        self.ai = None
 
     async def start(self):
         """启动所有服务"""
@@ -74,22 +71,7 @@ class MediaCenter:
         # 注：TTS 不再显式暂停 AirPlay / DLNA / 背景音乐，
         # 改由 PulseAudio module-role-ducking 在系统层做音量自动压制。
 
-        # 6. 定时任务
-        self.scheduler = Scheduler(
-            config.get("scheduler", default={}),
-            tts_engine=self.tts,
-            background_player=self.background_player,
-        )
-        await self.scheduler.start()
-
-        # 7. AI 代理
-        ai_config = config.get("ai", default={})
-        if ai_config.get("enabled"):
-            from .ai.agent import AIAgent
-            self.ai = AIAgent(ai_config, media_center=self)
-            logger.info("AI 代理已启动")
-
-        # 8. 自动播放背景音乐
+        # 6. 自动播放背景音乐
         bg_config = config.get("background_music", default={})
         if bg_config.get("auto_play") and bg_config.get("playlist"):
             play_mode = bg_config.get("play_mode", "repeat_all")
@@ -114,14 +96,11 @@ class MediaCenter:
             else {},
             "airplay": self.airplay.get_status() if self.airplay else {},
             "dlna": self.dlna.get_status() if self.dlna else {},
-            "ai_enabled": self.ai is not None,
         }
 
     async def shutdown(self):
         """关闭所有服务"""
         logger.info("正在关闭媒体中心...")
-        if self.scheduler:
-            await self.scheduler.stop()
         if self.airplay:
             await self.airplay.stop()
         if self.dlna:

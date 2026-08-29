@@ -1,6 +1,6 @@
 # OpenWrt 媒体中心 (MediaCenter)
 
-基于 Python 的 OpenWrt 多功能音频中心，支持**多优先级音频管理**、**AirPlay**、**DLNA**、**TTS 语音播报**、**定时任务**和 **AI 智能控制**。
+基于 Python 的 OpenWrt 多功能音频中心，支持**多优先级音频管理**、**AirPlay**、**DLNA** 和 **TTS 语音播报**。
 
 ## 功能特性
 
@@ -10,8 +10,6 @@
 | 📱 AirPlay | iPhone/iPad/Mac 无线推送音频 | ✅ |
 | 📺 DLNA | Android/PC DLNA 推送音频 | ✅ |
 | 🔊 TTS | 文字转语音播报 (edge-tts/OpenAI) | ✅ |
-| ⏰ 定时任务 | 定时下载新闻联播等 | ✅ |
-| 🤖 AI 代理 | GPT 驱动的智能控制 | ✅ |
 | 🔀 打断规则 | AirPlay / DLNA 互相硬重启互斥；mpv 被动让位 | ✅ |
 
 ### 音频流打断规则
@@ -144,7 +142,7 @@ sh scripts/docker_run.sh logs
 sh scripts/docker_run.sh stop
 ```
 
-[`scripts/docker_run.sh`](scripts/docker_run.sh) 默认会准备宿主机数据目录 `/opt/mediacenter`，并将整个目录挂载到容器内 `/etc/mediacenter`。其中 `config.yaml` 仍通过独立只读挂载覆盖，其他运行数据（如 `user_jobs.json`、`scripts/`、`job_logs/`）统一落在该目录下。这样可以避免把 `user_jobs.json` 单文件 bind mount 到容器后，在更新任务状态时因原子替换触发 `Resource busy`。
+[`scripts/docker_run.sh`](scripts/docker_run.sh) 会把当前目录的 `config.yaml`（不存在时自动从 `config.yaml.example` 复制）以只读方式挂载到容器内 `/etc/mediacenter/config.yaml`；可通过环境变量 `CONFIG_PATH` 指定其他配置文件路径。
 
 #### 网络模式选择
 
@@ -176,10 +174,6 @@ CONTAINER_IP=192.168.1.200 AIRPLAY_NAME="客厅音箱" \
 或者手动运行：
 
 ```bash
-DATA_PATH=/opt/mediacenter
-mkdir -p "$DATA_PATH/scripts" "$DATA_PATH/job_logs"
-[ -e "$DATA_PATH/user_jobs.json" ] || echo "[]" > "$DATA_PATH/user_jobs.json"
-
 docker network create -d macvlan \
   --subnet=192.168.1.0/24 \
   --gateway=192.168.1.1 \
@@ -193,7 +187,6 @@ docker run -d \
   --ip 192.168.1.200 \
   -e PULSE_SERVER=unix:/run/pulse/native \
   -v /run/pulse:/run/pulse \
-  -v "$DATA_PATH":/etc/mediacenter \
   -v $(pwd)/config.yaml:/etc/mediacenter/config.yaml:ro \
   -e AIRPLAY_NAME="客厅音箱" \
   openwrt-mediacenter
@@ -218,23 +211,16 @@ sh scripts/docker_run.sh run-host
 或手动：
 
 ```bash
-DATA_PATH=/opt/mediacenter
-mkdir -p "$DATA_PATH/scripts" "$DATA_PATH/job_logs"
-[ -e "$DATA_PATH/user_jobs.json" ] || echo "[]" > "$DATA_PATH/user_jobs.json"
-
 docker run -d \
   --name mediacenter \
   --restart unless-stopped \
   --network host \
   -e PULSE_SERVER=unix:/run/pulse/native \
   -v /run/pulse:/run/pulse \
-  -v "$DATA_PATH":/etc/mediacenter \
   -v $(pwd)/config.yaml:/etc/mediacenter/config.yaml:ro \
   -e AIRPLAY_NAME="客厅音箱" \
   openwrt-mediacenter
 ```
-
-> **定时任务持久化说明：** 建议始终把宿主机的整个数据目录挂载到容器内 `/etc/mediacenter`，而不是分别挂载 `user_jobs.json`、`scripts/`、`job_logs/`。如果你之前使用旧版脚本，并且这三个路径本来就在同一个宿主机目录（默认就是 `/opt/mediacenter`），升级后通常只需要停止旧容器并用新版脚本重建即可，无需额外迁移数据；如果你是手写 `docker run`，请同步改成整目录挂载，否则用户任务更新 `last_run`、`last_status` 时仍可能遇到 `Resource busy`。
 
 > ⚠️ 不要使用默认的 bridge 网络 — bridge 无法转发 mDNS 多播，iPhone 将发现不了 AirPlay 设备。
 
@@ -414,8 +400,8 @@ curl -X POST http://localhost:8080/api/tts/clear-cache
 
 Web UI 中也提供了 TTS 投递卡片：打开 [`/ui/`](mediacenter/static/index.html) 后，可直接输入播报文本，并在“设备音箱”和“当前浏览器”之间切换播放目标。
 
-- 选择“设备音箱”时，前端调用 [`/api/tts/speak`](mediacenter/api/routes.py:211)，声音从设备侧输出。
-- 选择“当前浏览器”时，前端直接播放 [`/api/tts/stream`](mediacenter/api/routes.py:227) 返回的音频流，只会在当前页面本地播出。
+- 选择“设备音箱”时，前端调用 [`/api/tts/speak`](mediacenter/api/routes.py:198)，声音从设备侧输出。
+- 选择“当前浏览器”时，前端直接播放 [`/api/tts/stream`](mediacenter/api/routes.py:217) 返回的音频流，只会在当前页面本地播出。
 - 浏览器本地播放依赖页面的音频播放权限；若浏览器拦截自动播放，按页面提示重试即可。
 
 ### 音量控制
@@ -437,26 +423,6 @@ curl -X POST http://localhost:8080/api/volume \
 ```bash
 curl http://localhost:8080/api/airplay/status
 curl http://localhost:8080/api/dlna/status
-```
-
-### 定时任务
-
-```bash
-# 手动触发下载新闻联播
-curl -X POST http://localhost:8080/api/scheduler/run/download_news
-```
-
-### AI 对话
-
-```bash
-# 需要先在 config.yaml 中配置 AI
-curl -X POST http://localhost:8080/api/ai/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "播放一首轻音乐"}'
-
-curl -X POST http://localhost:8080/api/ai/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "把音量调到 30，然后用语音告诉我现在几点"}'
 ```
 
 ---
@@ -659,10 +625,6 @@ openwrt-mediacenter/
 │   │   └── renderer.py       # DLNA 渲染 (gmrender-resurrect)
 │   ├── tts/
 │   │   └── engine.py         # TTS 引擎 (edge-tts/OpenAI/Piper)
-│   ├── scheduler/
-│   │   └── jobs.py           # 定时任务
-│   ├── ai/
-│   │   └── agent.py          # AI 代理 (OpenAI 兼容)
 │   └── api/
 │       └── routes.py         # REST API (FastAPI)
 └── scripts/

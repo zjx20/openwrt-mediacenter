@@ -8,16 +8,6 @@ IMAGE_NAME="openwrt-mediacenter"
 CONTAINER_NAME="mediacenter"
 DOCKERFILE_PATH="${DOCKERFILE_PATH:-${DOCKERFILE:-Dockerfile}}"
 CONFIG_PATH="${CONFIG_PATH:-$(pwd)/config.yaml}"
-# 持久化数据目录（整体挂载到 /etc/mediacenter，保存定时任务元数据、脚本、日志等）
-DATA_PATH="${DATA_PATH:-/opt/mediacenter}"
-
-# 准备宿主机持久化目录与文件
-prepare_data_dirs() {
-  mkdir -p "$DATA_PATH" "$DATA_PATH/scripts" "$DATA_PATH/job_logs"
-  if [ ! -e "$DATA_PATH/user_jobs.json" ]; then
-    echo "[]" > "$DATA_PATH/user_jobs.json"
-  fi
-}
 
 # ---- macvlan 默认参数（按实际网络环境修改） ----
 MACVLAN_NET="${MACVLAN_NET:-mcvlan}"
@@ -60,10 +50,7 @@ case "${1:-run}" in
       exit 1
     }
 
-    prepare_data_dirs
-
     echo "=== 启动媒体中心容器 (macvlan, IP=$CONTAINER_IP) ==="
-    echo "  数据目录: $DATA_PATH"
     docker run -d \
       --name "$CONTAINER_NAME" \
       --restart unless-stopped \
@@ -72,10 +59,8 @@ case "${1:-run}" in
       --ip "$CONTAINER_IP" \
       -e PULSE_SERVER=unix:/run/pulse/native \
       -v /run/pulse:/run/pulse \
-      -v "$DATA_PATH":/etc/mediacenter \
       -v "$CONFIG_PATH":/etc/mediacenter/config.yaml:ro \
       -v /tmp/tts_cache:/tmp/tts_cache \
-      -v /tmp/news:/tmp/news \
       -e AIRPLAY_NAME="${AIRPLAY_NAME:-OpenWrt MediaCenter}" \
       "$IMAGE_NAME"
 
@@ -91,20 +76,15 @@ case "${1:-run}" in
       echo "已创建配置文件: $CONFIG_PATH (请根据需要修改)"
     fi
 
-    prepare_data_dirs
-
     echo "=== 启动媒体中心容器 (host network) ==="
-    echo "  数据目录: $DATA_PATH"
     docker run -d \
       --name "$CONTAINER_NAME" \
       --restart unless-stopped \
       --network host \
       -e PULSE_SERVER=unix:/run/pulse/native \
       -v /run/pulse:/run/pulse \
-      -v "$DATA_PATH":/etc/mediacenter \
       -v "$CONFIG_PATH":/etc/mediacenter/config.yaml:ro \
       -v /tmp/tts_cache:/tmp/tts_cache \
-      -v /tmp/news:/tmp/news \
       -e AIRPLAY_NAME="${AIRPLAY_NAME:-OpenWrt MediaCenter}" \
       "$IMAGE_NAME"
 
