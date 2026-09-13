@@ -54,6 +54,10 @@ class MpvPlayer:
         self._last_start_duration_ms: int | None = None
         self._last_start_error: str | None = None
         self._last_pulse_prop: str | None = None
+        # 事件处理器在独立 task 里跑(见 _listen 的说明),这里留引用免得被 GC
+        self._handler_tasks: set[asyncio.Task] = set()
+        # _reset_runtime 进行中:此时 _listen 结束不算"mpv 意外退出"
+        self._closing = False
 
     async def _capture_stderr(self):
         """持续采集 mpv stderr，便于启动失败时诊断。"""
@@ -91,6 +95,19 @@ class MpvPlayer:
 
     async def _reset_runtime(self):
         """清理 IPC 连接和 mpv 子进程状态。"""
+        self._closing = True
+        try:
+            await self._do_reset_runtime()
+        finally:
+            self._closing = False
+
+    async def _do_reset_runtime(self):
+        # 还在等回复的命令不可能再等到了,让它们立刻失败而不是干等超时
+        for fut in self._response_futures.values():
+            if not fut.done():
+                fut.set_exception(ConnectionError("mpv 进程已重置"))
+        self._response_futures.clear()
+
         if self._listen_task:
             self._listen_task.cancel()
             try:
@@ -260,11 +277,20 @@ class MpvPlayer:
         )
 
     async def _listen(self):
-        """监听 mpv 的 IPC 消息"""
+        """监听 mpv 的 IPC 消息。
+
+        事件处理器一律扔进独立 task 执行,**不在这个读循环里 await**:
+        处理器常常自己又要发 IPC 命令(end-file → 播下一首 → loadfile),而命令的
+        回复只能由本循环读到 —— 在这里 await 就是自己等自己,每次自动切歌都会
+        卡满 5 秒超时。mpv 那边其实照样执行了 loadfile,只是应用侧记成失败、
+        state 停在 STOPPED、channel.available 变 False(2026-09-13 实测)。
+        """
+        died = False  # 连接是 mpv 那头断的(EOF / 连接错误),而不是我们把任务取消了
         try:
             while self._reader and not self._reader.at_eof():
                 line = await self._reader.readline()
                 if not line:
+                    died = True
                     break
                 try:
                     msg = json.loads(line.decode().strip())
@@ -276,20 +302,50 @@ class MpvPlayer:
                     if not fut.done():
                         fut.set_result(msg)
                 elif "event" in msg:
-                    event_name = msg["event"]
-                    if event_name == "end-file":
-                        self.state = PlayerState.STOPPED
-                    for handler in self._event_handlers.get(event_name, []):
-                        try:
-                            result = handler(msg)
-                            if asyncio.iscoroutine(result):
-                                await result
-                        except Exception as e:
-                            logger.error(f"事件处理器异常: {e}")
-        except (ConnectionError, asyncio.CancelledError):
+                    self._on_mpv_event(msg)
+            else:
+                died = True
+        except ConnectionError:
+            died = True
+        except asyncio.CancelledError:
             pass
         finally:
             self.state = PlayerState.STOPPED
+            if died and not self._closing:
+                # 不是我们在关它,是 mpv 自己没了(崩溃 / OOM)。当成一次以 error
+                # 结束的 end-file 广播出去,让上层(背景音乐)有机会续播下一首;
+                # 下一条命令进来时 _ensure_mpv 会重新拉起 mpv。
+                rc = self._process.returncode if self._process else None
+                logger.warning(f"[{self.name}] mpv IPC 连接断开(进程退出?), returncode={rc}")
+                # 失效的连接置空,下一条命令进 _ensure_mpv 时直接走重建分支
+                if self._writer:
+                    self._writer.close()
+                self._reader = self._writer = None
+                self._on_mpv_event({"event": "end-file", "reason": "error", "synthetic": True})
+
+    def _on_mpv_event(self, msg: dict):
+        """更新播放状态,并把事件派发给处理器(异步,不阻塞读循环)。"""
+        event_name = msg["event"]
+        if event_name == "end-file":
+            self.state = PlayerState.STOPPED
+        elif event_name == "file-loaded" and self.state != PlayerState.PAUSED:
+            self.state = PlayerState.PLAYING
+
+        handlers = self._event_handlers.get(event_name)
+        if not handlers:
+            return
+        task = asyncio.create_task(self._dispatch(event_name, handlers, msg))
+        self._handler_tasks.add(task)
+        task.add_done_callback(self._handler_tasks.discard)
+
+    async def _dispatch(self, event_name: str, handlers: list[Callable], msg: dict):
+        for handler in handlers:
+            try:
+                result = handler(msg)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as e:
+                logger.error(f"[{self.name}] 事件 {event_name} 的处理器异常: {e}", exc_info=True)
 
     async def _command(self, *args, timeout: float = 5.0) -> dict:
         """发送 mpv IPC 命令"""
@@ -307,7 +363,18 @@ class MpvPlayer:
             self._writer.write((json.dumps(cmd) + "\n").encode())
             await self._writer.drain()
             resp = await asyncio.wait_for(future, timeout=timeout)
-        except (asyncio.TimeoutError, ConnectionError, BrokenPipeError, RuntimeError) as e:
+        except asyncio.TimeoutError as e:
+            # mpv 对命令的回复正常是毫秒级(loadfile 也是立刻回,不等下载)。
+            # 等满超时说明它的主循环挂了,留着只会让后面每条命令都再卡一轮,
+            # 直接重建进程,下一条命令会重新拉起。
+            self._response_futures.pop(rid, None)
+            self._last_start_error = (
+                f"mpv 命令超时: command={list(args)!r}, timeout={timeout}s;已重建 mpv"
+            )
+            logger.warning(f"[{self.name}] {self._last_start_error}")
+            await self._reset_runtime()
+            raise RuntimeError(self._last_start_error) from e
+        except (ConnectionError, BrokenPipeError, RuntimeError) as e:
             self._response_futures.pop(rid, None)
             self._last_start_error = f"mpv 命令失败: command={list(args)!r}, error={e}"
             logger.warning(f"[{self.name}] {self._last_start_error}")
@@ -327,15 +394,22 @@ class MpvPlayer:
         """注册事件处理器"""
         self._event_handlers.setdefault(event_name, []).append(handler)
 
-    async def play(self, url: str, wait: bool = False):
+    async def play(self, url: str, wait: bool = False, http_headers: dict | None = None):
         """播放音频
 
         Args:
             url: 音频 URL 或本地文件路径
             wait: 是否等待播放完成
+            http_headers: 拉流要带的 HTTP 头(B 站直链没有 Referer 会 403);
+                          不传就清空,免得上一首的头带到下一首
         """
         self._current_url = url
+        headers = [f"{k}: {v}" for k, v in (http_headers or {}).items()]
+        await self._command("set_property", "http-header-fields", headers)
         await self._command("loadfile", url, "replace")
+        # pause 属性在 loadfile 之后仍然保留:暂停状态下 next/play 会得到一首
+        # "正在播放"却没声音的歌,所以每次开新文件都显式解除
+        await self._command("set_property", "pause", False)
         self.state = PlayerState.PLAYING
         logger.info(f"[{self.name}] 开始播放: {url}")
 

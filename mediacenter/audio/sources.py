@@ -27,6 +27,8 @@ class Track:
     source: str = "unknown"
     # yt-dlp 解析后的直接播放 URL
     playback_url: str = ""
+    # 拉 playback_url 时要带的 HTTP 头(yt-dlp 给的 http_headers;B 站直链缺 Referer 会 403)
+    http_headers: dict = field(default_factory=dict)
 
     @property
     def effective_url(self) -> str:
@@ -48,7 +50,9 @@ class Playlist:
         if self.play_mode == PlayMode.REPEAT_ONE:
             return self.tracks[self.current_index]
         elif self.play_mode == PlayMode.SHUFFLE:
-            self.current_index = random.randint(0, len(self.tracks) - 1)
+            # 多于一首时别连着抽到同一首
+            candidates = [i for i in range(len(self.tracks)) if i != self.current_index]
+            self.current_index = random.choice(candidates or [self.current_index])
         else:
             self.current_index += 1
             if self.current_index >= len(self.tracks):
@@ -102,12 +106,15 @@ async def resolve_url(url: str) -> list[Track]:
                 continue
             try:
                 info = json.loads(line)
+                # generic 提取器碰到裸媒体文件(navidrome 的 stream.view 之类)会标
+                # direct=True:它没有"网页 → 流地址"这一步,播放时不必再跑一次 yt-dlp
+                source = "direct" if info.get("direct") else info.get("extractor", "unknown")
                 track = Track(
                     url=info.get("webpage_url", info.get("url", url)),
                     title=info.get("title", "Unknown"),
                     artist=info.get("uploader", info.get("artist", "")),
                     duration=info.get("duration", 0) or 0,
-                    source=info.get("extractor", "unknown"),
+                    source=source,
                 )
                 tracks.append(track)
             except json.JSONDecodeError:
@@ -123,13 +130,20 @@ async def resolve_url(url: str) -> list[Track]:
         return [Track(url=url, title=url, source="direct")]
 
 
-async def get_stream_url(url: str) -> str:
-    """获取单个 URL 的直接流播放地址"""
+async def resolve_stream(url: str) -> tuple[str, dict]:
+    """获取单个 URL 的直接流播放地址,连同拉流要带的 HTTP 头。
+
+    用 --dump-json 而不是 --get-url:后者只吐 URL,把 yt-dlp 算好的
+    http_headers 丢了 —— B 站的直链没有 Referer 直接 403(mpv 报 loading failed)。
+    解析不了就原样返回,让 mpv 自己试。
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
             "yt-dlp",
             "--no-download",
-            "--get-url",
+            "--dump-json",
+            "--no-playlist",
+            "--no-warnings",
             "-f", "bestaudio/best",
             url,
             stdout=asyncio.subprocess.PIPE,
@@ -137,10 +151,20 @@ async def get_stream_url(url: str) -> str:
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
         if proc.returncode == 0 and stdout.strip():
-            return stdout.decode().strip().split("\n")[0]
-    except (FileNotFoundError, asyncio.TimeoutError):
-        pass
-    return url
+            info = json.loads(stdout.decode().strip().split("\n")[0])
+            stream_url = info.get("url") or url
+            headers = info.get("http_headers") or {}
+            return stream_url, dict(headers)
+        logger.warning(f"yt-dlp 解析流地址失败: {stderr.decode()[:200]}")
+    except (FileNotFoundError, asyncio.TimeoutError, json.JSONDecodeError) as e:
+        logger.warning(f"yt-dlp 解析流地址失败: {e!r}")
+    return url, {}
+
+
+async def get_stream_url(url: str) -> str:
+    """兼容旧接口:只要直接流地址,不要头"""
+    stream_url, _ = await resolve_stream(url)
+    return stream_url
 
 
 async def search_music(query: str, source: str = "youtube") -> list[Track]:

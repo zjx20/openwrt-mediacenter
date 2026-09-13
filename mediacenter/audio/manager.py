@@ -77,7 +77,7 @@ class AudioManager:
         channel.available = channel.last_error is None
         return result
 
-    async def play(self, priority: AudioPriority, url: str):
+    async def play(self, priority: AudioPriority, url: str, http_headers: dict | None = None):
         """在指定通道播放音频。
 
         多通道并行：不再暂停其它通道，PulseAudio 会按 media.role 自动 ducking。
@@ -86,7 +86,7 @@ class AudioManager:
             await self._call_channel(
                 priority,
                 "play",
-                lambda player: player.play(url),
+                lambda player: player.play(url, http_headers=http_headers),
             )
             self._active_priority = priority
 
