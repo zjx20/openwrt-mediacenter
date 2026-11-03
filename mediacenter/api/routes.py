@@ -103,7 +103,7 @@ async def health():
 
 @app.post("/api/stop-timer")
 async def set_stop_timer(req: StopTimerRequest):
-    """设置一次性定时停止全部播放，新设置覆盖旧设置。"""
+    """定时停止背景音乐和设备端 TTS，保留 AirPlay / DLNA 服务及会话。"""
     mc = _get_mc()
     try:
         return mc.stop_timer.schedule(timestamp=req.timestamp, duration=req.duration)

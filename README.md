@@ -415,7 +415,7 @@ curl http://localhost:8080/api/health
 curl http://localhost:8080/api/status
 ```
 
-### 定时停止全部播放
+### 定时停止背景音乐和设备端 TTS
 
 `POST /api/stop-timer` 接收 `timestamp` 或 `duration`，必须二选一，均以**秒**为单位，支持小数：
 
@@ -441,8 +441,8 @@ curl -X DELETE http://localhost:8080/api/stop-timer
 {"active": true, "timestamp": 1793710800.0, "remaining": 1799.9, "stopping": false, "last_error": null}
 ```
 
-- 到点停止背景音乐及所有设备端 mpv 通道（含 TTS），关闭 AirPlay / DLNA 接收服务并断开投屏会话，HTTP API 保持运行。浏览器本地播放不在控制范围内。
-- 后续背景音乐可正常通过播放接口启动；AirPlay / DLNA 需分别调用 `POST /api/airplay/start`、`POST /api/dlna/start` 重新开启。
+- 到点停止背景音乐及设备端 mpv 通道（含 TTS），清除投屏结束后自动恢复背景音乐的标记。AirPlay / DLNA 服务及投屏会话继续运行，正在投屏的音频不受定时停止控制。浏览器本地播放不在控制范围内。
+- 定时触发后仍可正常发起 AirPlay / DLNA 投屏，无需重新启动接收服务；背景音乐也可通过播放接口重新启动。
 - 同一时间只保留一个待触发定时，新设置覆盖旧设置；取消只影响尚未触发的定时，已开始的停止操作会继续完成。
 - `duration` 必须大于 0，`timestamp` 必须在未来。缺失、同时传入、非有限数字等非法参数返回 422，已过期时间戳返回 400；错误请求保留原定时。
 - 定时触发后 `active` 为 `false`、`timestamp` 为 `null`、`remaining` 为 `0`；停止执行期间 `stopping` 为 `true`，失败原因记录在 `last_error`，并继续尝试停止其他通道。

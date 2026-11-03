@@ -102,31 +102,13 @@ class MediaCenter:
         }
 
     async def stop_playback(self):
-        """停止全部设备端播放，断开投屏会话，保留 HTTP 服务。"""
-        receivers = [receiver for receiver in (self.airplay, self.dlna) if receiver]
-        # 取消投屏起播时排队的互斥重启，防止停止后被对端重新拉起。
-        pending = [
-            receiver._pending_peer_restart for receiver in receivers
-            if receiver._pending_peer_restart is not None
-        ]
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-
+        """停止本地 mpv 播放；AirPlay / DLNA 接收服务及会话继续运行。"""
         if self.audio_manager:
             # 投屏结束事件不得恢复被它暂停的背景音乐。
             for channel in self.audio_manager.channels.values():
                 channel.was_playing = False
 
-        async def stop_receiver(receiver):
-            async with receiver._restart_lock:
-                await receiver.stop()
-
-        operations = [
-            ("airplay" if receiver is self.airplay else "dlna", stop_receiver(receiver))
-            for receiver in receivers
-        ]
+        operations = []
         if self.background_player:
             operations.append(("background", self.background_player.stop()))
         if self.audio_manager:

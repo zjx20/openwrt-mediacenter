@@ -163,12 +163,14 @@ class StopPlaybackTests(unittest.IsolatedAsyncioTestCase):
         mc.background_player = SimpleNamespace(stop=AsyncMock())
         for name in ("airplay", "dlna"):
             setattr(mc, name, SimpleNamespace(
-                stop=AsyncMock(), _restart_lock=asyncio.Lock(),
+                stop=AsyncMock(), start=AsyncMock(), restart=AsyncMock(),
+                pause=AsyncMock(), resume=AsyncMock(),
+                running=True, is_playing=True, _restart_lock=asyncio.Lock(),
                 _pending_peer_restart=None,
             ))
         return mc
 
-    async def test_timer_stops_all_playback_and_prevents_background_resume(self):
+    async def test_timer_stops_local_playback_and_preserves_casting(self):
         mc = self.make_mc()
         for channel in mc.audio_manager.channels.values():
             channel.was_playing = True
@@ -176,34 +178,38 @@ class StopPlaybackTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.02)
         await mc.stop_timer.shutdown()
         mc.background_player.stop.assert_awaited_once()
-        mc.airplay.stop.assert_awaited_once()
-        mc.dlna.stop.assert_awaited_once()
+        for receiver in (mc.airplay, mc.dlna):
+            for action in ("stop", "start", "restart", "pause", "resume"):
+                getattr(receiver, action).assert_not_called()
+            self.assertTrue(receiver.running)
+            self.assertTrue(receiver.is_playing)
         self.assertCountEqual(
             mc.audio_manager.stop.await_args_list,
             [unittest.mock.call(AudioPriority.STREAM), unittest.mock.call(AudioPriority.TTS)],
         )
         self.assertFalse(any(ch.was_playing for ch in mc.audio_manager.channels.values()))
 
-    async def test_failure_does_not_skip_other_services(self):
+    async def test_failure_does_not_skip_other_local_channels(self):
         mc = self.make_mc()
-        mc.airplay.stop.side_effect = RuntimeError("unavailable")
-        with self.assertRaisesRegex(RuntimeError, "airplay: unavailable"):
+        mc.background_player.stop.side_effect = RuntimeError("unavailable")
+        with self.assertRaisesRegex(RuntimeError, "background: unavailable"):
             await mc.stop_playback()
-        mc.dlna.stop.assert_awaited_once()
         mc.background_player.stop.assert_awaited_once()
         mc.audio_manager.stop.assert_any_await(AudioPriority.TTS)
+        mc.airplay.stop.assert_not_called()
+        mc.dlna.stop.assert_not_called()
 
-    async def test_pending_peer_restart_is_cancelled_before_stopping(self):
+    async def test_pending_casting_task_is_not_cancelled(self):
         mc = self.make_mc()
-        pending = asyncio.create_task(asyncio.sleep(60))
+        release = asyncio.Event()
+        pending = asyncio.create_task(release.wait())
         mc.airplay._pending_peer_restart = pending
-
-        async def stop():
-            self.assertTrue(pending.cancelled())
-
-        mc.dlna.stop.side_effect = stop
-        await mc.stop_playback()
-        self.assertTrue(pending.cancelled())
+        try:
+            await mc.stop_playback()
+            self.assertFalse(pending.done())
+        finally:
+            release.set()
+            await pending
 
     async def test_stop_during_url_resolution_does_not_restart_background(self):
         manager = AudioManager()
