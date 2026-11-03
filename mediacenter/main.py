@@ -15,6 +15,7 @@ from .airplay.receiver import AirPlayReceiver
 from .dlna.renderer import DLNARenderer
 from .tts.engine import TTSEngine
 from .api.routes import app, init_api
+from .stop_timer import StopTimer
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class MediaCenter:
         self.airplay: AirPlayReceiver | None = None
         self.dlna: DLNARenderer | None = None
         self.tts: TTSEngine | None = None
+        self.stop_timer = StopTimer(self.stop_playback)
 
     async def start(self):
         """启动所有服务"""
@@ -96,11 +98,58 @@ class MediaCenter:
             else {},
             "airplay": self.airplay.get_status() if self.airplay else {},
             "dlna": self.dlna.get_status() if self.dlna else {},
+            "stop_timer": self.stop_timer.get_status(),
         }
+
+    async def stop_playback(self):
+        """停止全部设备端播放，断开投屏会话，保留 HTTP 服务。"""
+        receivers = [receiver for receiver in (self.airplay, self.dlna) if receiver]
+        # 取消投屏起播时排队的互斥重启，防止停止后被对端重新拉起。
+        pending = [
+            receiver._pending_peer_restart for receiver in receivers
+            if receiver._pending_peer_restart is not None
+        ]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        if self.audio_manager:
+            # 投屏结束事件不得恢复被它暂停的背景音乐。
+            for channel in self.audio_manager.channels.values():
+                channel.was_playing = False
+
+        async def stop_receiver(receiver):
+            async with receiver._restart_lock:
+                await receiver.stop()
+
+        operations = [
+            ("airplay" if receiver is self.airplay else "dlna", stop_receiver(receiver))
+            for receiver in receivers
+        ]
+        if self.background_player:
+            operations.append(("background", self.background_player.stop()))
+        if self.audio_manager:
+            for priority in AudioPriority:
+                if priority == AudioPriority.BACKGROUND and self.background_player:
+                    continue
+                operations.append((priority.name.lower(), self.audio_manager.stop(priority)))
+
+        results = await asyncio.gather(
+            *(operation for _, operation in operations), return_exceptions=True
+        )
+        errors = [
+            f"{name}: {result}"
+            for (name, _), result in zip(operations, results)
+            if isinstance(result, BaseException)
+        ]
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
     async def shutdown(self):
         """关闭所有服务"""
         logger.info("正在关闭媒体中心...")
+        await self.stop_timer.shutdown()
         if self.airplay:
             await self.airplay.stop()
         if self.dlna:

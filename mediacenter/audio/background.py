@@ -27,6 +27,7 @@ class BackgroundPlayer:
         self._task: asyncio.Task | None = None
         self._playing = False
         self._consecutive_errors = 0
+        self._playback_generation = 0
 
         # 监听播放结束事件，自动切下一首
         bg_player = manager.channels[AudioPriority.BACKGROUND].player
@@ -65,7 +66,7 @@ class BackgroundPlayer:
 
     async def _advance(self):
         """切到下一首并播放;起播失败(解析失败、mpv 重建)就继续往后试。"""
-        while True:
+        while self._playing:
             next_track = self.playlist.next_track()
             if next_track is None:
                 self._playing = False
@@ -83,12 +84,16 @@ class BackgroundPlayer:
 
     async def _play_track(self, track: Track):
         """播放单个曲目"""
+        generation = self._playback_generation
         if track.source == "direct":
             # 加载时 yt-dlp 就认不出它(navidrome 之类的裸流),别每首再跑一次
             # yt-dlp(这台机器上一次一两秒,还有 30s 超时的风险)
             url, headers = track.url, {}
         else:
             url, headers = await resolve_stream(track.url)
+        # stop 可能发生在 URL 解析期间，旧的起播任务不能让音频重新响起。
+        if generation != self._playback_generation:
+            return
         track.playback_url = url
         track.http_headers = headers
         await self.manager.play(AudioPriority.BACKGROUND, track.effective_url, http_headers=headers)
@@ -134,6 +139,7 @@ class BackgroundPlayer:
     async def stop(self):
         """停止播放"""
         self._playing = False
+        self._playback_generation += 1
         await self.manager.stop(AudioPriority.BACKGROUND)
 
     async def next(self):

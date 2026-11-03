@@ -415,6 +415,39 @@ curl http://localhost:8080/api/health
 curl http://localhost:8080/api/status
 ```
 
+### 定时停止全部播放
+
+`POST /api/stop-timer` 接收 `timestamp` 或 `duration`，必须二选一，均以**秒**为单位，支持小数：
+
+```bash
+# 30 分钟后停止
+curl -X POST http://localhost:8080/api/stop-timer \
+  -H "Content-Type: application/json" \
+  -d '{"duration": 1800}'
+
+# 在指定 Unix 时间戳停止（示例取当前时间的一小时后；不是毫秒时间戳）
+curl -X POST http://localhost:8080/api/stop-timer \
+  -H "Content-Type: application/json" \
+  -d "{\"timestamp\": $(($(date +%s) + 3600))}"
+
+# 查询 / 取消定时
+curl http://localhost:8080/api/stop-timer
+curl -X DELETE http://localhost:8080/api/stop-timer
+```
+
+设置和查询返回示例（`timestamp` 为实际停止时间，`remaining` 为剩余秒数）：
+
+```json
+{"active": true, "timestamp": 1793710800.0, "remaining": 1799.9, "stopping": false, "last_error": null}
+```
+
+- 到点停止背景音乐及所有设备端 mpv 通道（含 TTS），关闭 AirPlay / DLNA 接收服务并断开投屏会话，HTTP API 保持运行。浏览器本地播放不在控制范围内。
+- 后续背景音乐可正常通过播放接口启动；AirPlay / DLNA 需分别调用 `POST /api/airplay/start`、`POST /api/dlna/start` 重新开启。
+- 同一时间只保留一个待触发定时，新设置覆盖旧设置；取消只影响尚未触发的定时，已开始的停止操作会继续完成。
+- `duration` 必须大于 0，`timestamp` 必须在未来。缺失、同时传入、非有限数字等非法参数返回 422，已过期时间戳返回 400；错误请求保留原定时。
+- 定时触发后 `active` 为 `false`、`timestamp` 为 `null`、`remaining` 为 `0`；停止执行期间 `stopping` 为 `true`，失败原因记录在 `last_error`，并继续尝试停止其他通道。
+- `/api/status` 中也包含 `stop_timer` 状态。定时保存在内存中，服务重启后不保留；`duration` 使用单调时钟计时，`timestamp` 按收到请求时与服务器时间的差值计时。
+
 ### 背景音乐
 
 ```bash
@@ -696,11 +729,15 @@ openwrt-mediacenter/
 ├── .dockerignore
 ├── config.yaml.example       # 配置模板
 ├── requirements.txt          # Python 依赖
+├── requirements-dev.txt      # 测试依赖
+├── tests/
+│   └── test_stop_timer.py     # 定时停止行为与 API 测试
 ├── mediacenter/
 │   ├── __init__.py
 │   ├── __main__.py           # python -m mediacenter 入口
 │   ├── main.py               # 主服务，启动所有组件
 │   ├── config.py             # 配置管理
+│   ├── stop_timer.py         # 一次性定时停止
 │   ├── audio/
 │   │   ├── manager.py        # 优先级音频管理器
 │   │   ├── player.py         # mpv 播放器封装
@@ -720,6 +757,15 @@ openwrt-mediacenter/
     ├── docker_run.sh         # Docker 构建/运行脚本
     └── init.d_mediacenter    # 系统服务脚本
 ```
+
+## 开发验证
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+python3 -m unittest discover -s tests -v
+```
+
+测试使用模拟播放器和进程内 HTTP 请求，不需要启动 mpv、AirPlay 或 DLNA 服务。
 
 ## 系统要求
 

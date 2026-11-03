@@ -1,13 +1,14 @@
 """REST API - FastAPI 路由"""
 
 import logging
+import math
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,31 @@ class PlayModeRequest(BaseModel):
     mode: str  # sequential / shuffle / repeat_one / repeat_all
 
 
+class StopTimerRequest(BaseModel):
+    timestamp: Optional[float] = Field(
+        default=None, strict=True, gt=0, allow_inf_nan=False,
+        description="停止时间，Unix 时间戳（秒）",
+    )
+    duration: Optional[float] = Field(
+        default=None, strict=True, gt=0, allow_inf_nan=False,
+        description="从收到请求起延迟的秒数",
+    )
+
+    @field_validator("timestamp", "duration", mode="before")
+    @classmethod
+    def check_finite(cls, value):
+        if isinstance(value, float) and not math.isfinite(value):
+            # 避免默认校验错误将 inf / nan 原样放进无法 JSON 编码的响应。
+            raise HTTPException(422, "timestamp 和 duration 必须是有限数字")
+        return value
+
+    @model_validator(mode="after")
+    def check_time(self):
+        if (self.timestamp is None) == (self.duration is None):
+            raise ValueError("timestamp 和 duration 必须且只能提供一个")
+        return self
+
+
 # ========== 系统状态 ==========
 
 @app.get("/api/status")
@@ -71,6 +97,30 @@ async def get_status():
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+# ========== 定时停止 ==========
+
+@app.post("/api/stop-timer")
+async def set_stop_timer(req: StopTimerRequest):
+    """设置一次性定时停止全部播放，新设置覆盖旧设置。"""
+    mc = _get_mc()
+    try:
+        return mc.stop_timer.schedule(timestamp=req.timestamp, duration=req.duration)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/stop-timer")
+async def get_stop_timer():
+    """查询定时停止状态。"""
+    return _get_mc().stop_timer.get_status()
+
+
+@app.delete("/api/stop-timer")
+async def cancel_stop_timer():
+    """取消尚未触发的定时停止。"""
+    return _get_mc().stop_timer.cancel()
 
 
 # ========== 背景音乐 ==========
